@@ -1,0 +1,5 @@
+starlette>=0.37
+uvicorn>=0.30
+websockets>=12
+python-multipart>=0.0.9
+openpyxl>=3.1
