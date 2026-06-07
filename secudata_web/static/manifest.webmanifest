@@ -1,9 +1,0 @@
-{
-  "name": "SECU-DAT Web",
-  "short_name": "SECU-DAT",
-  "start_url": "/",
-  "display": "standalone",
-  "background_color": "#6f6f72",
-  "theme_color": "#111215",
-  "description": "Browser-Oberfläche für SECUTEST/PSI Datenerfassung und Sequenztests."
-}
