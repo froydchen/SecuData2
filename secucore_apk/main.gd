@@ -16,7 +16,7 @@ func _ready() -> void:
         test_button.disabled = true
         return
 
-    core = SecuCore.new()
+    core = ClassDB.instantiate("SecuCore")
     status_label.text = "SECUCORE C++ GELADEN"
     status_label.modulate = Color("68e39a")
     detail_label.text = core.get_version() + "\nBasis: SecuData fix117"
