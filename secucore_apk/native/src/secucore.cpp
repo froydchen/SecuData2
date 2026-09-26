@@ -30,7 +30,7 @@ String SecuCore::calculate_checksum_hex(const String &payload_including_dollar) 
 }
 
 String SecuCore::build_frame(const String &command_core) const {
-    const String payload = command_core + "$";
+    const String payload = command_core + String("$");
     return payload + calculate_checksum_hex(payload) + "\r";
 }
 
@@ -54,7 +54,7 @@ double SecuCore::parse_numeric(const String &value, bool &ok) {
             continue;
         }
         if (started && (c == '.' || c == ',') && !dot_seen) {
-            out += ".";
+            out += String(".");
             dot_seen = true;
             continue;
         }
@@ -63,7 +63,7 @@ double SecuCore::parse_numeric(const String &value, bool &ok) {
         }
     }
 
-    ok = !out.is_empty() && out != "+" && out != "-";
+    ok = !out.is_empty() && out != String("+") && out != String("-");
     return ok ? out.to_float() : 0.0;
 }
 
@@ -94,9 +94,9 @@ Dictionary SecuCore::parse_direct_prx_blocks(
     const String &z_payload
 ) const {
     Dictionary out;
-    const PackedStringArray x = x_payload.split(";", true);
-    const PackedStringArray y = y_payload.split(";", true);
-    const PackedStringArray z = z_payload.split(";", true);
+    const PackedStringArray x = x_payload.split(String(";"), true);
+    const PackedStringArray y = y_payload.split(String(";"), true);
+    const PackedStringArray z = z_payload.split(String(";"), true);
 
     if (x.size() < 6 || y.size() < 2 || z.size() < 2) {
         out["valid"] = false;
@@ -105,7 +105,7 @@ Dictionary SecuCore::parse_direct_prx_blocks(
     }
 
     String protocol_id = x[0];
-    const int eq = protocol_id.find("=");
+    const int eq = protocol_id.find(String("="));
     if (eq >= 0) {
         protocol_id = protocol_id.substr(eq + 1);
     }
@@ -122,7 +122,7 @@ Dictionary SecuCore::parse_direct_prx_blocks(
     bool ipe_ok = false;
     double ipe = 0.0;
     for (int i = 1; i < y.size(); ++i) {
-        if (!y[i].to_upper().contains("MA")) {
+        if (!y[i].to_upper().contains(String("MA"))) {
             continue;
         }
         bool n_ok = false;
@@ -130,7 +130,7 @@ Dictionary SecuCore::parse_direct_prx_blocks(
         if (n_ok) {
             ipe = n;
             ipe_ok = true;
-            if (!y[i].strip_edges().begins_with("<") && !y[i].strip_edges().begins_with(">")) {
+            if (!y[i].strip_edges().begins_with(String("<")) && !y[i].strip_edges().begins_with(String(">"))) {
                 break;
             }
         }
@@ -139,7 +139,7 @@ Dictionary SecuCore::parse_direct_prx_blocks(
     bool u_ok = false;
     double mains_u = 0.0;
     for (int i = 1; i + 1 < z.size(); ++i) {
-        if (!z[i].to_upper().contains("V") || !z[i + 1].to_upper().contains("V")) {
+        if (!z[i].to_upper().contains(String("V")) || !z[i + 1].to_upper().contains("V")) {
             continue;
         }
         bool actual_ok = false;
@@ -230,7 +230,7 @@ Dictionary SecuCore::self_test() const {
     out["ok"] = checksum_ok && parser_ok;
     out["detail"] =
         String("Frame TAS?$4B + fix117 PRX X/Y/Z Parser: ") +
-        ((checksum_ok && parser_ok) ? "OK" : "FEHLER");
+        String((checksum_ok && parser_ok) ? "OK" : "FEHLER");
 
     return out;
 }
