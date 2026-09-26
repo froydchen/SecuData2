@@ -58,6 +58,12 @@ jobs:
           ANDROID_NDK_ROOT: ${{ env.ANDROID_NDK_ROOT }}
         run: scons platform=android target=template_debug arch=arm64 api_version=4.6 -j4
 
+      - name: Build tiny Linux host stub
+        shell: bash
+        run: |
+          mkdir -p secucore_apk/native/bin
+          gcc -shared -fPIC -O2 secucore_apk/native/host_stub.c -o secucore_apk/native/bin/libsecucore_host_stub.linux.x86_64.so
+
       - name: Download Godot 4.6.3 and export templates
         shell: bash
         run: |
