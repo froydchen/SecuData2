@@ -5,4 +5,3 @@ compatibility_minimum = "4.6"
 [libraries]
 android.debug.arm64 = "res://native/bin/libsecucore.android.template_debug.arm64.so"
 android.release.arm64 = "res://native/bin/libsecucore.android.template_release.arm64.so"
-linux.debug.x86_64 = "res://native/bin/libsecucore.linux.template_debug.x86_64.so"
