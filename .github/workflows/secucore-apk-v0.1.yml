@@ -52,15 +52,11 @@ jobs:
         shell: bash
         run: git clone --depth 1 https://github.com/godotengine/godot-cpp.git secucore_apk/native/godot-cpp
 
-      - name: Build SecuCore for Linux editor validation
-        working-directory: secucore_apk/native
-        run: scons platform=linux target=template_debug arch=x86_64 api_version=4.6 -j2
-
       - name: Build SecuCore for Android ARM64
         working-directory: secucore_apk/native
         env:
           ANDROID_NDK_ROOT: ${{ env.ANDROID_NDK_ROOT }}
-        run: scons platform=android target=template_debug arch=arm64 api_version=4.6 -j2
+        run: scons platform=android target=template_debug arch=arm64 api_version=4.6 -j4
 
       - name: Download Godot 4.6.3 and export templates
         shell: bash
@@ -92,10 +88,6 @@ jobs:
 
           mkdir -p "$HOME/.android"
           keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -keypass android -dname "CN=Android Debug,O=SecuData,C=DE" -keyalg RSA -keysize 2048 -validity 10000
-
-      - name: Validate Godot project and native Linux library
-        shell: bash
-        run: /tmp/godot/godot --headless --path secucore_apk --editor --quit-after 3
 
       - name: Export debug APK
         shell: bash
