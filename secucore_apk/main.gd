@@ -48,7 +48,7 @@ func _build_ui() -> void:
     root.add_child(title)
 
     var subtitle := Label.new()
-    subtitle.text = "SecuCore Android Debug · v0.1"
+    subtitle.text = "SecuCore Android Debug · v0.1b"
     subtitle.add_theme_font_size_override("font_size", 22)
     subtitle.modulate = Color("a9b7c6")
     root.add_child(subtitle)
