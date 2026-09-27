@@ -1,4 +1,4 @@
-name: SecuCore Android v0.1
+name: SecuCore Android v0.1b
 
 on:
   push:
@@ -11,7 +11,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
 
     steps:
       - name: Checkout
@@ -48,43 +48,49 @@ jobs:
           sdkmanager "platform-tools" "build-tools;35.0.1" "platforms;android-35" "ndk;28.1.13356709"
           echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/28.1.13356709" >> "$GITHUB_ENV"
 
-      - name: Fetch godot-cpp
+      - name: Fetch pinned godot-cpp
         shell: bash
-        run: git clone --depth 1 https://github.com/godotengine/godot-cpp.git secucore_apk/native/godot-cpp
+        run: |
+          git clone --depth 1 --branch 10.0.0-stable https://github.com/godotengine/godot-cpp.git secucore_apk/native/godot-cpp
+
+      - name: Build SecuCore for Linux validation
+        working-directory: secucore_apk/native
+        run: scons platform=linux target=template_debug arch=x86_64 api_version=4.7 -j4
 
       - name: Build SecuCore for Android ARM64
         working-directory: secucore_apk/native
         env:
           ANDROID_NDK_ROOT: ${{ env.ANDROID_NDK_ROOT }}
-        run: scons platform=android target=template_debug arch=arm64 api_version=4.6 -j4
+        run: scons platform=android target=template_debug arch=arm64 api_version=4.7 -j4
 
-      - name: Build tiny Linux host stub
+      - name: Download Godot 4.7.2 and export templates
         shell: bash
         run: |
-          mkdir -p secucore_apk/native/bin
-          gcc -shared -fPIC -O2 secucore_apk/native/host_stub.c -o secucore_apk/native/bin/libsecucore_host_stub.linux.x86_64.so
-
-      - name: Download Godot 4.6.3 and export templates
-        shell: bash
-        run: |
-          curl -L --fail --retry 3 -o /tmp/godot.zip "https://godot-releases.nbg1.your-objectstorage.com/4.6.3-stable/Godot_v4.6.3-stable_linux.x86_64.zip"
+          curl -L --fail --retry 3 -o /tmp/godot.zip "https://godot-releases.nbg1.your-objectstorage.com/4.7.2-stable/Godot_v4.7.2-stable_linux.x86_64.zip"
           unzip -q /tmp/godot.zip -d /tmp/godot
-          mv /tmp/godot/Godot_v4.6.3-stable_linux.x86_64 /tmp/godot/godot
+          mv /tmp/godot/Godot_v4.7.2-stable_linux.x86_64 /tmp/godot/godot
           chmod +x /tmp/godot/godot
 
-          curl -L --fail --retry 3 -o /tmp/templates.tpz "https://godot-releases.nbg1.your-objectstorage.com/4.6.3-stable/Godot_v4.6.3-stable_export_templates.tpz"
+          curl -L --fail --retry 3 -o /tmp/templates.tpz "https://godot-releases.nbg1.your-objectstorage.com/4.7.2-stable/Godot_v4.7.2-stable_export_templates.tpz"
           rm -rf /tmp/export_templates
           mkdir -p /tmp/export_templates
           unzip -q /tmp/templates.tpz -d /tmp/export_templates
 
-          mkdir -p "$HOME/.local/share/godot/export_templates/4.6.3.stable"
-          cp -a /tmp/export_templates/templates/. "$HOME/.local/share/godot/export_templates/4.6.3.stable/"
+          mkdir -p "$HOME/.local/share/godot/export_templates/4.7.2.stable"
+          cp -a /tmp/export_templates/templates/. "$HOME/.local/share/godot/export_templates/4.7.2.stable/"
+
+      - name: Run real SecuCore + Godot smoke test on Linux
+        shell: bash
+        run: |
+          set -o pipefail
+          /tmp/godot/godot --headless --path secucore_apk --quit-after 5 2>&1 | tee /tmp/secucore-smoke.log
+          grep -q "SECUCORE_SMOKE_OK" /tmp/secucore-smoke.log
 
       - name: Configure Godot Android paths
         shell: bash
         run: |
           mkdir -p "$HOME/.config/godot"
-          cat > "$HOME/.config/godot/editor_settings-4.6.tres" <<EOF
+          cat > "$HOME/.config/godot/editor_settings-4.7.tres" <<EOF
           [gd_resource type="EditorSettings" format=3]
 
           [resource]
@@ -103,13 +109,14 @@ jobs:
         run: |
           mkdir -p secucore_apk/out
           export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="$HOME/.android/debug.keystore"
-          /tmp/godot/godot --headless --path secucore_apk --export-debug Android out/SecuData_SecuCore_v0_1_debug.apk
-          test -f secucore_apk/out/SecuData_SecuCore_v0_1_debug.apk
-          ls -lh secucore_apk/out/SecuData_SecuCore_v0_1_debug.apk
+          /tmp/godot/godot --headless --path secucore_apk --export-debug Android out/SecuData_SecuCore_v0_1b_debug.apk
+          test -f secucore_apk/out/SecuData_SecuCore_v0_1b_debug.apk
+          unzip -l secucore_apk/out/SecuData_SecuCore_v0_1b_debug.apk | grep "lib/arm64-v8a/libsecucore.android.template_debug.arm64.so"
+          ls -lh secucore_apk/out/SecuData_SecuCore_v0_1b_debug.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: SecuData_SecuCore_v0_1_debug
-          path: secucore_apk/out/SecuData_SecuCore_v0_1_debug.apk
+          name: SecuData_SecuCore_v0_1b_debug
+          path: secucore_apk/out/SecuData_SecuCore_v0_1b_debug.apk
           if-no-files-found: error
