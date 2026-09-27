@@ -9,11 +9,13 @@ var frame_label: Label
 
 func _ready() -> void:
     _build_ui()
+    print("GODOT_SCENE_READY")
     if not ClassDB.class_exists("SecuCore"):
         status_label.text = "SECUCORE C++ NICHT GELADEN"
         status_label.modulate = Color("ff7885")
         detail_label.text = "Die native GDExtension konnte nicht geladen werden."
         test_button.disabled = true
+        print("SECUCORE_CLASS_MISSING")
         return
 
     core = ClassDB.instantiate("SecuCore")
@@ -22,7 +24,11 @@ func _ready() -> void:
     detail_label.text = core.get_version() + "\nBasis: SecuData fix117"
     var self_test: Dictionary = core.self_test()
     frame_label.text = "Native Selbstprüfung: " + ("OK" if bool(self_test.get("ok", false)) else "FEHLER") + "\n" + str(self_test.get("detail", ""))
-    if bool(self_test.get("ok", false)):\n        print("SECUCORE_SMOKE_OK")\n    else:\n        print("SECUCORE_SMOKE_FAILED: " + str(self_test))\n
+    if bool(self_test.get("ok", false)):
+        print("SECUCORE_SMOKE_OK")
+    else:
+        print("SECUCORE_SMOKE_FAILED: " + str(self_test))
+
 func _build_ui() -> void:
     var bg := ColorRect.new()
     bg.color = Color("07101a")
