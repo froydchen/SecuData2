@@ -22,7 +22,7 @@ func _ready() -> void:
     detail_label.text = core.get_version() + "\nBasis: SecuData fix117"
     var self_test: Dictionary = core.self_test()
     frame_label.text = "Native Selbstprüfung: " + ("OK" if bool(self_test.get("ok", false)) else "FEHLER") + "\n" + str(self_test.get("detail", ""))
-
+    if bool(self_test.get("ok", false)):\n        print("SECUCORE_SMOKE_OK")\n    else:\n        print("SECUCORE_SMOKE_FAILED: " + str(self_test))\n
 func _build_ui() -> void:
     var bg := ColorRect.new()
     bg.color = Color("07101a")
