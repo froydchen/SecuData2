@@ -15,14 +15,21 @@ void SecuCore::_bind_methods() {
     ClassDB::bind_method(D_METHOD("self_test"), &SecuCore::self_test);
     ClassDB::bind_method(D_METHOD("parse_direct_prx_blocks", "x_payload", "y_payload", "z_payload"), &SecuCore::parse_direct_prx_blocks);
     ClassDB::bind_method(D_METHOD("simulate_fix117_measurement"), &SecuCore::simulate_fix117_measurement);
+
     ClassDB::bind_method(D_METHOD("begin_identity_probe"), &SecuCore::begin_identity_probe);
     ClassDB::bind_method(D_METHOD("consume_identity_probe_line", "raw"), &SecuCore::consume_identity_probe_line);
     ClassDB::bind_method(D_METHOD("get_identity_probe_state"), &SecuCore::get_identity_probe_state);
     ClassDB::bind_method(D_METHOD("reset_identity_probe"), &SecuCore::reset_identity_probe);
+
+    ClassDB::bind_method(D_METHOD("begin_live_init"), &SecuCore::begin_live_init);
+    ClassDB::bind_method(D_METHOD("consume_live_line", "raw"), &SecuCore::consume_live_line);
+    ClassDB::bind_method(D_METHOD("begin_mes_status_query"), &SecuCore::begin_mes_status_query);
+    ClassDB::bind_method(D_METHOD("get_live_state"), &SecuCore::get_live_state);
+    ClassDB::bind_method(D_METHOD("reset_live_init"), &SecuCore::reset_live_init);
 }
 
 String SecuCore::get_version() const {
-    return "SecuCore C++ v0.2 · native ARM64";
+    return "SecuCore C++ v0.3 · BLE Live Init";
 }
 
 String SecuCore::calculate_checksum_hex(const String &payload_including_dollar) const {
@@ -37,6 +44,12 @@ String SecuCore::calculate_checksum_hex(const String &payload_including_dollar) 
 String SecuCore::build_frame(const String &command_core) const {
     const String payload = command_core + String("$");
     return payload + calculate_checksum_hex(payload) + "\r";
+}
+
+bool SecuCore::is_hex_char(char32_t c) {
+    return (c >= '0' && c <= '9') ||
+           (c >= 'A' && c <= 'F') ||
+           (c >= 'a' && c <= 'f');
 }
 
 String SecuCore::strip_frame_controls(const String &value) {
@@ -75,28 +88,49 @@ Dictionary SecuCore::parse_frame(const String &raw) const {
     String payload = normalized;
     String checksum_received;
     String checksum_calculated;
+    bool checksum_present = false;
     bool checksum_valid = false;
 
-    if (dollar >= 0) {
+    // Only treat "$xx" at the very end as an outer checksum.
+    // A checksumless direct SECUTEST response is valid input and must not be
+    // rejected merely because '$xx' is absent.
+    if (
+        dollar >= 0 &&
+        dollar == normalized.length() - 3 &&
+        is_hex_char(normalized.unicode_at(dollar + 1)) &&
+        is_hex_char(normalized.unicode_at(dollar + 2))
+    ) {
+        checksum_present = true;
         const String payload_including_dollar = normalized.substr(0, dollar + 1);
         payload = normalized.substr(0, dollar);
+        checksum_received = normalized.substr(dollar + 1, 2).to_upper();
         checksum_calculated = calculate_checksum_hex(payload_including_dollar);
-        if (normalized.length() >= dollar + 3) {
-            checksum_received = normalized.substr(dollar + 1, 2).to_upper();
-            checksum_valid = checksum_received == checksum_calculated;
-        }
-    } else {
-        checksum_calculated = calculate_checksum_hex(normalized);
+        checksum_valid = checksum_received == checksum_calculated;
     }
 
     out["raw"] = raw;
     out["normalized"] = normalized;
     out["payload"] = payload;
+    out["checksum_present"] = checksum_present;
     out["checksum_received"] = checksum_received;
     out["checksum_calculated"] = checksum_calculated;
     out["checksum_valid"] = checksum_valid;
+    out["checksum_acceptable"] = !checksum_present || checksum_valid;
+    out["checksum_state"] = checksum_present ? (checksum_valid ? "OK" : "FEHLER") : "KEINE";
     out["kind"] = classify_payload(payload);
     return out;
+}
+
+bool SecuCore::checksum_acceptable(const Dictionary &parsed) {
+    return bool(parsed.get("checksum_acceptable", false));
+}
+
+bool SecuCore::response_begins_with(const Dictionary &parsed, const String &prefix) {
+    if (String(parsed.get("kind", "")) != "RESPONSE") {
+        return false;
+    }
+    const String payload = String(parsed.get("payload", "")).strip_edges().to_upper();
+    return payload.begins_with(prefix.to_upper());
 }
 
 Dictionary SecuCore::begin_identity_probe() {
@@ -124,14 +158,13 @@ Dictionary SecuCore::consume_identity_probe_line(const String &raw) {
         return out;
     }
 
-    const bool checksum_valid = bool(parsed.get("checksum_valid", false));
     const String kind = String(parsed.get("kind", ""));
     const String payload = String(parsed.get("payload", ""));
     const String upper = payload.strip_edges().to_upper();
 
-    if (!checksum_valid) {
+    if (!checksum_acceptable(parsed)) {
         identity_probe_state = IdentityProbeState::ERROR;
-        identity_probe_error = "IDN?-Antwort mit ungültiger Checksumme";
+        identity_probe_error = "IDN?-Antwort mit falscher vorhandener Checksumme";
         out["accepted"] = true;
         out["complete"] = true;
         out["state"] = get_identity_probe_state();
@@ -183,6 +216,214 @@ String SecuCore::get_identity_probe_state() const {
 void SecuCore::reset_identity_probe() {
     identity_probe_state = IdentityProbeState::IDLE;
     identity_probe_error = "";
+}
+
+Dictionary SecuCore::make_live_command(const String &command, const String &message) const {
+    Dictionary out;
+    out["accepted"] = true;
+    out["complete"] = false;
+    out["success"] = false;
+    out["command"] = command;
+    out["next_command"] = command;
+    out["next_frame"] = build_frame(command);
+    out["state"] = get_live_state();
+    out["message"] = message;
+    return out;
+}
+
+Dictionary SecuCore::fail_live(const Dictionary &parsed, const String &message) {
+    live_state = LiveInitState::ERROR;
+    live_error = message;
+
+    Dictionary out;
+    out["frame"] = parsed;
+    out["accepted"] = true;
+    out["complete"] = true;
+    out["success"] = false;
+    out["state"] = get_live_state();
+    out["message"] = message;
+    return out;
+}
+
+Dictionary SecuCore::begin_live_init() {
+    live_state = LiveInitState::WAIT_IDN_INITIAL;
+    live_error = "";
+    live_identity = "";
+    live_mes_status = "";
+    return make_live_command("IDN?", "Gerätekennung lesen");
+}
+
+Dictionary SecuCore::consume_live_line(const String &raw) {
+    const Dictionary parsed = parse_frame(raw);
+
+    Dictionary out;
+    out["frame"] = parsed;
+    out["accepted"] = false;
+    out["complete"] = false;
+    out["success"] = false;
+    out["state"] = get_live_state();
+
+    if (live_state == LiveInitState::IDLE || live_state == LiveInitState::READY || live_state == LiveInitState::ERROR) {
+        out["message"] = "Kein passender Live-Befehl wartet auf eine Antwort";
+        return out;
+    }
+
+    if (!checksum_acceptable(parsed)) {
+        return fail_live(parsed, "Antwort mit falscher vorhandener Checksumme");
+    }
+
+    const String kind = String(parsed.get("kind", ""));
+    const String payload = String(parsed.get("payload", "")).strip_edges();
+    const String upper = payload.to_upper();
+
+    if (kind == "NACK") {
+        return fail_live(parsed, "SECUTEST meldet NACK in " + get_live_state());
+    }
+
+    switch (live_state) {
+        case LiveInitState::WAIT_IDN_INITIAL: {
+            if (!response_begins_with(parsed, "IDN")) {
+                out["message"] = "Warte weiter auf IDN?-Antwort";
+                return out;
+            }
+            live_identity = payload;
+            live_state = LiveInitState::WAIT_IDN0_ASSIGN;
+            out = make_live_command("IDN!0", "PSI-Adresse auf 0 setzen");
+            out["frame"] = parsed;
+            return out;
+        }
+
+        case LiveInitState::WAIT_IDN0_ASSIGN: {
+            if (!response_begins_with(parsed, "IDN")) {
+                out["message"] = "Warte weiter auf Antwort zu IDN!0";
+                return out;
+            }
+            live_state = LiveInitState::WAIT_IDN_AFTER_PSI;
+            out = make_live_command("IDN?", "Adressierung nach IDN!0 prüfen");
+            out["frame"] = parsed;
+            return out;
+        }
+
+        case LiveInitState::WAIT_IDN_AFTER_PSI: {
+            if (!response_begins_with(parsed, "IDN")) {
+                out["message"] = "Warte weiter auf zweite IDN?-Antwort";
+                return out;
+            }
+            live_state = LiveInitState::WAIT_IDN1_ASSIGN;
+            out = make_live_command("IDN1!1", "SECUTEST auf Adresse 1 setzen");
+            out["frame"] = parsed;
+            return out;
+        }
+
+        case LiveInitState::WAIT_IDN1_ASSIGN: {
+            if (!response_begins_with(parsed, "IDN")) {
+                out["message"] = "Warte weiter auf Antwort zu IDN1!1";
+                return out;
+            }
+            live_state = LiveInitState::WAIT_IDN1_VERIFY;
+            out = make_live_command("IDN1?", "Adressierten SECUTEST prüfen");
+            out["frame"] = parsed;
+            return out;
+        }
+
+        case LiveInitState::WAIT_IDN1_VERIFY: {
+            if (!response_begins_with(parsed, "IDN")) {
+                out["message"] = "Warte weiter auf IDN1?-Antwort";
+                return out;
+            }
+            if (!upper.contains("SECUTEST")) {
+                return fail_live(parsed, "IDN1? liefert keine SECUTEST-Identität");
+            }
+            live_identity = payload;
+            live_state = LiveInitState::WAIT_TASA_ACK;
+            out = make_live_command("TAS!a", "Tastatur/Remote-Modus nach Connect initialisieren");
+            out["frame"] = parsed;
+            out["identity"] = live_identity;
+            return out;
+        }
+
+        case LiveInitState::WAIT_TASA_ACK: {
+            if (kind != "ACK" && !upper.begins_with("TAS")) {
+                out["message"] = "Warte weiter auf Bestätigung zu TAS!a";
+                return out;
+            }
+            live_state = LiveInitState::WAIT_MES_STATUS;
+            out = make_live_command("MES?", "Aktuellen Messstatus lesen");
+            out["frame"] = parsed;
+            out["identity"] = live_identity;
+            return out;
+        }
+
+        case LiveInitState::WAIT_MES_STATUS: {
+            if (kind != "RESPONSE") {
+                out["message"] = "Warte weiter auf MES?-Antwort";
+                return out;
+            }
+            live_mes_status = payload;
+            live_state = LiveInitState::READY;
+
+            out["frame"] = parsed;
+            out["accepted"] = true;
+            out["complete"] = true;
+            out["success"] = true;
+            out["state"] = get_live_state();
+            out["message"] = "SECUTEST initialisiert und Live-Status gelesen";
+            out["identity"] = live_identity;
+            out["mes_status"] = live_mes_status;
+            return out;
+        }
+
+        default:
+            out["message"] = "Unbekannter Live-Zustand";
+            return out;
+    }
+}
+
+Dictionary SecuCore::begin_mes_status_query() {
+    if (live_state != LiveInitState::READY) {
+        Dictionary out;
+        out["accepted"] = false;
+        out["complete"] = true;
+        out["success"] = false;
+        out["state"] = get_live_state();
+        out["message"] = "SECUTEST ist noch nicht READY";
+        return out;
+    }
+    live_state = LiveInitState::WAIT_MES_STATUS;
+    return make_live_command("MES?", "Live-Messstatus aktualisieren");
+}
+
+String SecuCore::get_live_state() const {
+    switch (live_state) {
+        case LiveInitState::WAIT_IDN_INITIAL:
+            return "WAIT_IDN_INITIAL";
+        case LiveInitState::WAIT_IDN0_ASSIGN:
+            return "WAIT_IDN0_ASSIGN";
+        case LiveInitState::WAIT_IDN_AFTER_PSI:
+            return "WAIT_IDN_AFTER_PSI";
+        case LiveInitState::WAIT_IDN1_ASSIGN:
+            return "WAIT_IDN1_ASSIGN";
+        case LiveInitState::WAIT_IDN1_VERIFY:
+            return "WAIT_IDN1_VERIFY";
+        case LiveInitState::WAIT_TASA_ACK:
+            return "WAIT_TASA_ACK";
+        case LiveInitState::WAIT_MES_STATUS:
+            return "WAIT_MES_STATUS";
+        case LiveInitState::READY:
+            return "READY";
+        case LiveInitState::ERROR:
+            return "ERROR";
+        case LiveInitState::IDLE:
+        default:
+            return "IDLE";
+    }
+}
+
+void SecuCore::reset_live_init() {
+    live_state = LiveInitState::IDLE;
+    live_error = "";
+    live_identity = "";
+    live_mes_status = "";
 }
 
 double SecuCore::parse_numeric(const String &value, bool &ok) {
@@ -379,16 +620,23 @@ Dictionary SecuCore::self_test() const {
         result_ok;
 
     const String idn_frame = build_frame("IDN=SECUTEST S2-N10");
-    const Dictionary idn_parsed = parse_frame(idn_frame);
-    const bool idn_ok =
-        bool(idn_parsed.get("checksum_valid", false)) &&
-        String(idn_parsed.get("kind", "")) == String("RESPONSE") &&
-        String(idn_parsed.get("payload", "")).contains("SECUTEST");
+    const Dictionary checksummed = parse_frame(idn_frame);
+    const Dictionary checksumless = parse_frame("IDNx=x;GMN;Secutest S2N+10;GMC V 8.23");
+    const Dictionary damaged = parse_frame("IDN=SECUTEST$00");
 
-    out["ok"] = checksum_ok && parser_ok && idn_ok;
+    const bool frame_parser_ok =
+        bool(checksummed.get("checksum_present", false)) &&
+        bool(checksummed.get("checksum_valid", false)) &&
+        !bool(checksumless.get("checksum_present", true)) &&
+        bool(checksumless.get("checksum_acceptable", false)) &&
+        bool(damaged.get("checksum_present", false)) &&
+        !bool(damaged.get("checksum_valid", true)) &&
+        !bool(damaged.get("checksum_acceptable", true));
+
+    out["ok"] = checksum_ok && parser_ok && frame_parser_ok;
     out["detail"] =
-        String("Frame TAS?$4B + fix117 PRX X/Y/Z + IDN frame parser: ") +
-        String((checksum_ok && parser_ok && idn_ok) ? "OK" : "FEHLER");
+        String("TX checksum + fix117 PRX + optional RX checksum parser: ") +
+        String((checksum_ok && parser_ok && frame_parser_ok) ? "OK" : "FEHLER");
 
     return out;
 }
