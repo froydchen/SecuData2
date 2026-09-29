@@ -17,6 +17,11 @@ var test_button: Button
 var command_timer: Timer
 
 func _ready() -> void:
+    # Diese App ist UI-/Event-getrieben. Kein Grund, im Leerlauf mit voller
+    # Renderfrequenz zu laufen.
+    OS.low_processor_usage_mode = true
+    OS.low_processor_usage_mode_sleep_usec = 33000
+    Engine.max_fps = 30
     _build_ui()
     _build_timeout_timer()
     print("GODOT_SCENE_READY")
@@ -102,7 +107,7 @@ func _build_ui() -> void:
     root.add_child(title)
 
     var subtitle := Label.new()
-    subtitle.text = "SecuCore Android Debug · v0.3"
+    subtitle.text = "SecuCore Android Debug · v0.4"
     subtitle.add_theme_font_size_override("font_size", 21)
     subtitle.modulate = Color("a9b7c6")
     root.add_child(subtitle)
@@ -136,7 +141,7 @@ func _build_ui() -> void:
     root.add_child(connect_button)
 
     init_button = Button.new()
-    init_button.text = "SECUTEST INIT + STATUS"
+    init_button.text = "SECUTEST VERBINDUNG + STATUS"
     init_button.custom_minimum_size.y = 54
     init_button.add_theme_font_size_override("font_size", 17)
     init_button.disabled = true
@@ -159,7 +164,7 @@ func _build_ui() -> void:
     root.add_child(test_button)
 
     measurement_label = Label.new()
-    measurement_label.text = "Noch keine Live-Initialisierung ausgelöst."
+    measurement_label.text = "Bereit. Keine aktive Gerätekommunikation."
     measurement_label.add_theme_font_size_override("font_size", 20)
     measurement_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     measurement_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -320,7 +325,7 @@ func _consume_rx_line(line: String) -> void:
 
     if bool(result.get("complete", false)):
         measurement_label.text = (
-            "LIVE-INIT FEHLER"
+            "VERBINDUNGSFEHLER"
             + "\n" + str(result.get("message", "unbekannt"))
             + "\nState: " + str(result.get("state", ""))
         )
@@ -332,7 +337,7 @@ func _on_command_timeout() -> void:
     var timed_out := pending_command
     pending_command = ""
     var state := str(core.get_live_state()) if core != null else "?"
-    measurement_label.text = "TIMEOUT bei " + timed_out + "\nCore: " + state + "\nInit kann erneut gestartet werden."
+    measurement_label.text = "TIMEOUT bei " + timed_out + "\nCore: " + state + "\nVerbindungstest kann erneut gestartet werden."
     measurement_label.modulate = Color("ffcc66")
     if core != null:
         core.reset_live_init()
@@ -364,3 +369,22 @@ func _fmt(value) -> String:
     if value == null:
         return "—"
     return str(value)
+
+
+func _notification(what: int) -> void:
+    if what == NOTIFICATION_APPLICATION_PAUSED:
+        # Bildschirm aus / App im Hintergrund: keine Scans, keine GATT-Verbindung,
+        # kein laufender Kommando-Timeout. Das verhindert unnötige Hintergrundlast.
+        if command_timer != null:
+            command_timer.stop()
+        pending_command = ""
+        rx_buffer = ""
+        if core != null:
+            core.reset_live_init()
+        if ble != null:
+            ble.disconnect()
+    elif what == NOTIFICATION_APPLICATION_RESUMED:
+        if ble_label != null:
+            ble_label.text = "App aktiv · BLE bei Bedarf neu verbinden"
+        if measurement_label != null:
+            measurement_label.text = "Bereit. Keine Hintergrundkommunikation aktiv."
