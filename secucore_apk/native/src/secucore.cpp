@@ -11,13 +11,18 @@ void SecuCore::_bind_methods() {
     ClassDB::bind_method(D_METHOD("get_version"), &SecuCore::get_version);
     ClassDB::bind_method(D_METHOD("calculate_checksum_hex", "payload_including_dollar"), &SecuCore::calculate_checksum_hex);
     ClassDB::bind_method(D_METHOD("build_frame", "command_core"), &SecuCore::build_frame);
+    ClassDB::bind_method(D_METHOD("parse_frame", "raw"), &SecuCore::parse_frame);
     ClassDB::bind_method(D_METHOD("self_test"), &SecuCore::self_test);
     ClassDB::bind_method(D_METHOD("parse_direct_prx_blocks", "x_payload", "y_payload", "z_payload"), &SecuCore::parse_direct_prx_blocks);
     ClassDB::bind_method(D_METHOD("simulate_fix117_measurement"), &SecuCore::simulate_fix117_measurement);
+    ClassDB::bind_method(D_METHOD("begin_identity_probe"), &SecuCore::begin_identity_probe);
+    ClassDB::bind_method(D_METHOD("consume_identity_probe_line", "raw"), &SecuCore::consume_identity_probe_line);
+    ClassDB::bind_method(D_METHOD("get_identity_probe_state"), &SecuCore::get_identity_probe_state);
+    ClassDB::bind_method(D_METHOD("reset_identity_probe"), &SecuCore::reset_identity_probe);
 }
 
 String SecuCore::get_version() const {
-    return "SecuCore C++ v0.1 · native ARM64";
+    return "SecuCore C++ v0.2 · native ARM64";
 }
 
 String SecuCore::calculate_checksum_hex(const String &payload_including_dollar) const {
@@ -32,6 +37,152 @@ String SecuCore::calculate_checksum_hex(const String &payload_including_dollar) 
 String SecuCore::build_frame(const String &command_core) const {
     const String payload = command_core + String("$");
     return payload + calculate_checksum_hex(payload) + "\r";
+}
+
+String SecuCore::strip_frame_controls(const String &value) {
+    int start = 0;
+    int end = value.length();
+
+    auto is_control = [](char32_t c) {
+        return c == 0x02 || c == 0x03 || c == 0x11 || c == 0x13 || c == 0x00 || c == '\r' || c == '\n';
+    };
+
+    while (start < end && is_control(value.unicode_at(start))) {
+        ++start;
+    }
+    while (end > start && is_control(value.unicode_at(end - 1))) {
+        --end;
+    }
+    return value.substr(start, end - start);
+}
+
+String SecuCore::classify_payload(const String &payload) {
+    const String upper = payload.strip_edges().to_upper();
+    if (upper.begins_with(".Y") || upper.begins_with("Y")) {
+        return "ACK";
+    }
+    if (upper.begins_with(".N") || upper.begins_with("N")) {
+        return "NACK";
+    }
+    return "RESPONSE";
+}
+
+Dictionary SecuCore::parse_frame(const String &raw) const {
+    Dictionary out;
+    const String normalized = strip_frame_controls(raw);
+    const int dollar = normalized.rfind("$");
+
+    String payload = normalized;
+    String checksum_received;
+    String checksum_calculated;
+    bool checksum_valid = false;
+
+    if (dollar >= 0) {
+        const String payload_including_dollar = normalized.substr(0, dollar + 1);
+        payload = normalized.substr(0, dollar);
+        checksum_calculated = calculate_checksum_hex(payload_including_dollar);
+        if (normalized.length() >= dollar + 3) {
+            checksum_received = normalized.substr(dollar + 1, 2).to_upper();
+            checksum_valid = checksum_received == checksum_calculated;
+        }
+    } else {
+        checksum_calculated = calculate_checksum_hex(normalized);
+    }
+
+    out["raw"] = raw;
+    out["normalized"] = normalized;
+    out["payload"] = payload;
+    out["checksum_received"] = checksum_received;
+    out["checksum_calculated"] = checksum_calculated;
+    out["checksum_valid"] = checksum_valid;
+    out["kind"] = classify_payload(payload);
+    return out;
+}
+
+Dictionary SecuCore::begin_identity_probe() {
+    identity_probe_state = IdentityProbeState::WAITING_IDN;
+    identity_probe_error = "";
+
+    Dictionary out;
+    out["command"] = "IDN?";
+    out["frame"] = build_frame("IDN?");
+    out["state"] = get_identity_probe_state();
+    return out;
+}
+
+Dictionary SecuCore::consume_identity_probe_line(const String &raw) {
+    Dictionary out;
+    const Dictionary parsed = parse_frame(raw);
+    out["frame"] = parsed;
+    out["accepted"] = false;
+    out["complete"] = false;
+    out["success"] = false;
+
+    if (identity_probe_state != IdentityProbeState::WAITING_IDN) {
+        out["state"] = get_identity_probe_state();
+        out["message"] = "Kein IDN?-Probe aktiv";
+        return out;
+    }
+
+    const bool checksum_valid = bool(parsed.get("checksum_valid", false));
+    const String kind = String(parsed.get("kind", ""));
+    const String payload = String(parsed.get("payload", ""));
+    const String upper = payload.strip_edges().to_upper();
+
+    if (!checksum_valid) {
+        identity_probe_state = IdentityProbeState::ERROR;
+        identity_probe_error = "IDN?-Antwort mit ungültiger Checksumme";
+        out["accepted"] = true;
+        out["complete"] = true;
+        out["state"] = get_identity_probe_state();
+        out["message"] = identity_probe_error;
+        return out;
+    }
+
+    if (kind == "NACK") {
+        identity_probe_state = IdentityProbeState::ERROR;
+        identity_probe_error = "NACK auf IDN?";
+        out["accepted"] = true;
+        out["complete"] = true;
+        out["state"] = get_identity_probe_state();
+        out["message"] = identity_probe_error;
+        return out;
+    }
+
+    if (kind != "RESPONSE" || !upper.begins_with("IDN")) {
+        out["state"] = get_identity_probe_state();
+        out["message"] = "Unsolicited/unerwarteter Frame während IDN?-Probe";
+        return out;
+    }
+
+    identity_probe_state = IdentityProbeState::IDENTIFIED;
+    out["accepted"] = true;
+    out["complete"] = true;
+    out["success"] = true;
+    out["state"] = get_identity_probe_state();
+    out["identity"] = payload;
+    out["is_secutest"] = upper.contains("SECUTEST");
+    out["message"] = upper.contains("SECUTEST") ? "SECUTEST-Identität empfangen" : "IDN-Antwort empfangen";
+    return out;
+}
+
+String SecuCore::get_identity_probe_state() const {
+    switch (identity_probe_state) {
+        case IdentityProbeState::WAITING_IDN:
+            return "WAITING_IDN";
+        case IdentityProbeState::IDENTIFIED:
+            return "IDENTIFIED";
+        case IdentityProbeState::ERROR:
+            return "ERROR";
+        case IdentityProbeState::IDLE:
+        default:
+            return "IDLE";
+    }
+}
+
+void SecuCore::reset_identity_probe() {
+    identity_probe_state = IdentityProbeState::IDLE;
+    identity_probe_error = "";
 }
 
 double SecuCore::parse_numeric(const String &value, bool &ok) {
@@ -227,10 +378,17 @@ Dictionary SecuCore::self_test() const {
         Math::is_equal_approx(u, 197.2) &&
         result_ok;
 
-    out["ok"] = checksum_ok && parser_ok;
+    const String idn_frame = build_frame("IDN=SECUTEST S2-N10");
+    const Dictionary idn_parsed = parse_frame(idn_frame);
+    const bool idn_ok =
+        bool(idn_parsed.get("checksum_valid", false)) &&
+        String(idn_parsed.get("kind", "")) == String("RESPONSE") &&
+        String(idn_parsed.get("payload", "")).contains("SECUTEST");
+
+    out["ok"] = checksum_ok && parser_ok && idn_ok;
     out["detail"] =
-        String("Frame TAS?$4B + fix117 PRX X/Y/Z Parser: ") +
-        String((checksum_ok && parser_ok) ? "OK" : "FEHLER");
+        String("Frame TAS?$4B + fix117 PRX X/Y/Z + IDN frame parser: ") +
+        String((checksum_ok && parser_ok && idn_ok) ? "OK" : "FEHLER");
 
     return out;
 }
