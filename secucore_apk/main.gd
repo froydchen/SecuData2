@@ -3,6 +3,7 @@ extends Control
 var core
 var ble
 var rx_buffer := ""
+var pending_command := ""
 
 var status_label: Label
 var detail_label: Label
@@ -10,11 +11,14 @@ var ble_label: Label
 var measurement_label: Label
 var frame_label: Label
 var connect_button: Button
-var idn_button: Button
+var init_button: Button
+var mes_button: Button
 var test_button: Button
+var command_timer: Timer
 
 func _ready() -> void:
     _build_ui()
+    _build_timeout_timer()
     print("GODOT_SCENE_READY")
 
     if not ClassDB.class_exists("SecuCore"):
@@ -22,7 +26,8 @@ func _ready() -> void:
         status_label.modulate = Color("ff7885")
         detail_label.text = "Die native GDExtension konnte nicht geladen werden."
         connect_button.disabled = true
-        idn_button.disabled = true
+        init_button.disabled = true
+        mes_button.disabled = true
         test_button.disabled = true
         print("SECUCORE_CLASS_MISSING")
         return
@@ -41,27 +46,36 @@ func _ready() -> void:
 
     _setup_ble()
 
+func _build_timeout_timer() -> void:
+    command_timer = Timer.new()
+    command_timer.one_shot = true
+    command_timer.wait_time = 4.0
+    command_timer.timeout.connect(_on_command_timeout)
+    add_child(command_timer)
+
 func _setup_ble() -> void:
     if not Engine.has_singleton("SecuDataBle"):
         ble_label.text = "BLE-Bridge nur im Android-Build verfügbar."
         connect_button.disabled = true
-        idn_button.disabled = true
+        init_button.disabled = true
+        mes_button.disabled = true
         return
 
     ble = Engine.get_singleton("SecuDataBle")
     ble.state_changed.connect(_on_ble_state_changed)
     ble.rx_text.connect(_on_ble_rx_text)
     ble.ble_error.connect(_on_ble_error)
+
     connect_button.disabled = false
-    idn_button.disabled = true
+    init_button.disabled = true
+    mes_button.disabled = true
 
     if not bool(ble.isBluetoothSupported()):
         ble_label.text = "Bluetooth LE wird auf diesem Gerät nicht unterstützt."
         connect_button.disabled = true
         return
 
-    var permission_state := str(ble.getPermissionState())
-    ble_label.text = "BLE bereit · Berechtigung: " + permission_state
+    ble_label.text = "BLE bereit · Berechtigung: " + str(ble.getPermissionState())
 
 func _build_ui() -> void:
     var bg := ColorRect.new()
@@ -78,7 +92,7 @@ func _build_ui() -> void:
     add_child(margin)
 
     var root := VBoxContainer.new()
-    root.add_theme_constant_override("separation", 14)
+    root.add_theme_constant_override("separation", 12)
     margin.add_child(root)
 
     var title := Label.new()
@@ -88,7 +102,7 @@ func _build_ui() -> void:
     root.add_child(title)
 
     var subtitle := Label.new()
-    subtitle.text = "SecuCore Android Debug · v0.2"
+    subtitle.text = "SecuCore Android Debug · v0.3"
     subtitle.add_theme_font_size_override("font_size", 21)
     subtitle.modulate = Color("a9b7c6")
     root.add_child(subtitle)
@@ -108,43 +122,51 @@ func _build_ui() -> void:
 
     ble_label = Label.new()
     ble_label.text = "BLE wird initialisiert …"
-    ble_label.add_theme_font_size_override("font_size", 18)
+    ble_label.add_theme_font_size_override("font_size", 17)
     ble_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     ble_label.modulate = Color("c8d2dc")
     root.add_child(ble_label)
 
     connect_button = Button.new()
     connect_button.text = "BLE RS232 VERBINDEN"
-    connect_button.custom_minimum_size.y = 62
-    connect_button.add_theme_font_size_override("font_size", 19)
+    connect_button.custom_minimum_size.y = 58
+    connect_button.add_theme_font_size_override("font_size", 18)
     connect_button.disabled = true
     connect_button.pressed.connect(_connect_ble)
     root.add_child(connect_button)
 
-    idn_button = Button.new()
-    idn_button.text = "IDN? TESTEN"
-    idn_button.custom_minimum_size.y = 58
-    idn_button.add_theme_font_size_override("font_size", 18)
-    idn_button.disabled = true
-    idn_button.pressed.connect(_run_identity_probe)
-    root.add_child(idn_button)
+    init_button = Button.new()
+    init_button.text = "SECUTEST INIT + STATUS"
+    init_button.custom_minimum_size.y = 54
+    init_button.add_theme_font_size_override("font_size", 17)
+    init_button.disabled = true
+    init_button.pressed.connect(_start_live_init)
+    root.add_child(init_button)
+
+    mes_button = Button.new()
+    mes_button.text = "MES? STATUS AKTUALISIEREN"
+    mes_button.custom_minimum_size.y = 50
+    mes_button.add_theme_font_size_override("font_size", 16)
+    mes_button.disabled = true
+    mes_button.pressed.connect(_refresh_mes_status)
+    root.add_child(mes_button)
 
     test_button = Button.new()
     test_button.text = "SIMULIERTE FIX117-MESSUNG"
-    test_button.custom_minimum_size.y = 54
-    test_button.add_theme_font_size_override("font_size", 17)
+    test_button.custom_minimum_size.y = 50
+    test_button.add_theme_font_size_override("font_size", 16)
     test_button.pressed.connect(_run_measurement)
     root.add_child(test_button)
 
     measurement_label = Label.new()
-    measurement_label.text = "Noch keine Messung / IDN-Abfrage ausgelöst."
-    measurement_label.add_theme_font_size_override("font_size", 21)
+    measurement_label.text = "Noch keine Live-Initialisierung ausgelöst."
+    measurement_label.add_theme_font_size_override("font_size", 20)
     measurement_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     measurement_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
     root.add_child(measurement_label)
 
     frame_label = Label.new()
-    frame_label.add_theme_font_size_override("font_size", 15)
+    frame_label.add_theme_font_size_override("font_size", 14)
     frame_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     frame_label.modulate = Color("7f93a7")
     root.add_child(frame_label)
@@ -158,9 +180,12 @@ func _connect_ble() -> void:
         ble_label.text = "Bluetooth-Berechtigung angefordert. Zulassen und danach noch einmal auf Verbinden tippen."
         return
 
+    command_timer.stop()
+    pending_command = ""
     rx_buffer = ""
-    core.reset_identity_probe()
-    idn_button.disabled = true
+    core.reset_live_init()
+    init_button.disabled = true
+    mes_button.disabled = true
     measurement_label.text = "Suche nach BLE RS232 …"
     measurement_label.modulate = Color("c8d2dc")
     ble.startScan("BLE RS232")
@@ -169,21 +194,31 @@ func _on_ble_state_changed(state: String, detail: String) -> void:
     ble_label.text = state + (" · " + detail if not detail.is_empty() else "")
 
     if state == "READY":
-        idn_button.disabled = false
         connect_button.text = "BLE NEU VERBINDEN"
-        _run_identity_probe()
+        init_button.disabled = false
+        mes_button.disabled = true
+        # Der echte Nutzungsfall soll nach dem Connect ohne Extra-Tippen bereit sein.
+        _start_live_init()
     elif state in ["SCANNING", "CONNECTING", "CONNECTED", "UART_FOUND", "ENABLING_NOTIFY"]:
-        idn_button.disabled = true
+        init_button.disabled = true
+        mes_button.disabled = true
     elif state == "DISCONNECTED":
-        idn_button.disabled = true
+        command_timer.stop()
+        pending_command = ""
+        core.reset_live_init()
+        init_button.disabled = true
+        mes_button.disabled = true
 
 func _on_ble_error(message: String) -> void:
+    command_timer.stop()
+    pending_command = ""
     ble_label.text = "BLE-FEHLER · " + message
     measurement_label.text = message
     measurement_label.modulate = Color("ff7885")
-    idn_button.disabled = true
+    init_button.disabled = false if ble != null and str(ble.getConnectionState()) == "READY" else true
+    mes_button.disabled = true
 
-func _run_identity_probe() -> void:
+func _start_live_init() -> void:
     if ble == null or core == null:
         return
     if str(ble.getConnectionState()) != "READY":
@@ -192,15 +227,47 @@ func _run_identity_probe() -> void:
         return
 
     rx_buffer = ""
-    var probe: Dictionary = core.begin_identity_probe()
-    var frame := str(probe.get("frame", ""))
-    measurement_label.text = "IDN? gesendet · warte auf SECUTEST-Antwort …"
+    core.reset_live_init()
+    init_button.disabled = true
+    mes_button.disabled = true
+    var action: Dictionary = core.begin_live_init()
+    _send_core_action(action)
+
+func _refresh_mes_status() -> void:
+    if ble == null or core == null:
+        return
+    var action: Dictionary = core.begin_mes_status_query()
+    if not bool(action.get("accepted", false)):
+        measurement_label.text = str(action.get("message", "MES? nicht möglich"))
+        measurement_label.modulate = Color("ffcc66")
+        return
+    mes_button.disabled = true
+    _send_core_action(action)
+
+func _send_core_action(action: Dictionary) -> void:
+    var frame := str(action.get("next_frame", ""))
+    var command := str(action.get("next_command", ""))
+
+    if frame.is_empty():
+        return
+
+    pending_command = command
+    measurement_label.text = (
+        str(action.get("message", "SECUTEST-Kommunikation"))
+        + "\n"
+        + str(action.get("state", ""))
+    )
     measurement_label.modulate = Color("c8d2dc")
-    frame_label.text = "TX: " + frame.replace("\r", "\\r")
+    frame_label.text = "TX: " + command + "\n" + frame.replace("\r", "\\r")
 
     if not bool(ble.sendText(frame)):
-        measurement_label.text = "IDN? konnte nicht über BLE gesendet werden."
+        pending_command = ""
+        measurement_label.text = command + " konnte nicht über BLE gesendet werden."
         measurement_label.modulate = Color("ff7885")
+        init_button.disabled = false
+        return
+
+    command_timer.start()
 
 func _on_ble_rx_text(chunk: String) -> void:
     rx_buffer += chunk
@@ -217,25 +284,60 @@ func _consume_rx_line(line: String) -> void:
     if core == null:
         return
 
-    var result: Dictionary = core.consume_identity_probe_line(line)
+    var result: Dictionary = core.consume_live_line(line)
     var parsed: Dictionary = result.get("frame", {})
+    var checksum_state := str(parsed.get("checksum_state", "?"))
+
     frame_label.text = (
         "RX: " + str(parsed.get("normalized", line))
-        + "\nChecksum: " + ("OK" if bool(parsed.get("checksum_valid", false)) else "FEHLER")
+        + "\nChecksum: " + checksum_state
         + " · Core: " + str(result.get("state", ""))
     )
 
     if not bool(result.get("accepted", false)):
         return
 
-    if bool(result.get("success", false)):
+    command_timer.stop()
+    pending_command = ""
+
+    if result.has("next_frame"):
+        _send_core_action(result)
+        return
+
+    if bool(result.get("complete", false)) and bool(result.get("success", false)):
         var identity := str(result.get("identity", ""))
-        measurement_label.text = "ECHTE IDN-ANTWORT\n" + identity
+        var mes_status := str(result.get("mes_status", ""))
+        measurement_label.text = (
+            "SECUTEST LIVE BEREIT"
+            + "\n" + identity
+            + "\nMES: " + mes_status
+        )
         measurement_label.modulate = Color("68e39a")
-        print("SECUCORE_REAL_IDN_OK: " + identity)
-    elif bool(result.get("complete", false)):
-        measurement_label.text = "IDN-FEHLER\n" + str(result.get("message", "unbekannt"))
+        init_button.disabled = false
+        mes_button.disabled = false
+        print("SECUCORE_LIVE_READY: " + identity + " | " + mes_status)
+        return
+
+    if bool(result.get("complete", false)):
+        measurement_label.text = (
+            "LIVE-INIT FEHLER"
+            + "\n" + str(result.get("message", "unbekannt"))
+            + "\nState: " + str(result.get("state", ""))
+        )
         measurement_label.modulate = Color("ff7885")
+        init_button.disabled = false
+        mes_button.disabled = true
+
+func _on_command_timeout() -> void:
+    var timed_out := pending_command
+    pending_command = ""
+    var state := str(core.get_live_state()) if core != null else "?"
+    measurement_label.text = "TIMEOUT bei " + timed_out + "\nCore: " + state + "\nInit kann erneut gestartet werden."
+    measurement_label.modulate = Color("ffcc66")
+    if core != null:
+        core.reset_live_init()
+    init_button.disabled = false if ble != null and str(ble.getConnectionState()) == "READY" else true
+    mes_button.disabled = true
 
 func _run_measurement() -> void:
     if core == null:
