@@ -29,7 +29,7 @@ void SecuCore::_bind_methods() {
 }
 
 String SecuCore::get_version() const {
-    return "SecuCore C++ v0.3 · BLE Live Init";
+    return "SecuCore C++ v0.4 · Direct BLE + Low Power";
 }
 
 String SecuCore::calculate_checksum_hex(const String &payload_including_dollar) const {
@@ -286,10 +286,15 @@ Dictionary SecuCore::consume_live_line(const String &raw) {
                 out["message"] = "Warte weiter auf IDN?-Antwort";
                 return out;
             }
+            if (!upper.contains("SECUTEST")) {
+                return fail_live(parsed, "IDN? liefert keine SECUTEST-Identität");
+            }
             live_identity = payload;
-            live_state = LiveInitState::WAIT_IDN0_ASSIGN;
-            out = make_live_command("IDN!0", "PSI-Adresse auf 0 setzen");
+            // Direkter SECUTEST-Betrieb: keine PSI-Adressierung.
+            live_state = LiveInitState::WAIT_TASA_ACK;
+            out = make_live_command("TAS!a", "Direktverbindung erkannt · TAS!a senden");
             out["frame"] = parsed;
+            out["identity"] = live_identity;
             return out;
         }
 
@@ -367,7 +372,7 @@ Dictionary SecuCore::consume_live_line(const String &raw) {
             out["complete"] = true;
             out["success"] = true;
             out["state"] = get_live_state();
-            out["message"] = "SECUTEST initialisiert und Live-Status gelesen";
+            out["message"] = "Direkter SECUTEST verbunden und Live-Status gelesen";
             out["identity"] = live_identity;
             out["mes_status"] = live_mes_status;
             return out;
