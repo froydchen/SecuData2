@@ -1,0 +1,145 @@
+name: SecuCore Android v0.2 BLE IDN
+
+on:
+  push:
+    branches:
+      - secucore-apk-v0.2
+    paths:
+      - "secucore_apk/**"
+      - ".github/workflows/secucore-apk-v0.2.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install SCons
+        run: python -m pip install --upgrade "scons>=4.8,<5"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Use preinstalled Android SDK
+        shell: bash
+        run: |
+          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> "$GITHUB_ENV"
+          echo "/usr/local/lib/android/sdk/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+
+      - name: Install Android packages
+        shell: bash
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager "platform-tools" "build-tools;35.0.1" "platforms;android-35" "ndk;28.1.13356709"
+          echo "ANDROID_NDK_ROOT=$ANDROID_HOME/ndk/28.1.13356709" >> "$GITHUB_ENV"
+
+      - name: Fetch pinned godot-cpp
+        shell: bash
+        run: |
+          rm -rf secucore_apk/native/godot-cpp
+          git clone --depth 1 --branch 10.0.0-stable https://github.com/godotengine/godot-cpp.git secucore_apk/native/godot-cpp
+
+      - name: Build SecuCore for Linux validation
+        working-directory: secucore_apk/native
+        run: scons platform=linux target=template_debug arch=x86_64 api_version=4.7 -j4
+
+      - name: Build SecuCore for Android ARM64
+        working-directory: secucore_apk/native
+        env:
+          ANDROID_NDK_ROOT: ${{ env.ANDROID_NDK_ROOT }}
+        run: scons platform=android target=template_debug arch=arm64 api_version=4.7 -j4
+
+      - name: Build SecuData BLE Android plugin
+        shell: bash
+        run: |
+          gradle -p secucore_apk/android_plugin :plugin:assembleDebug --stacktrace
+          mkdir -p secucore_apk/addons/secudata_ble/bin/debug
+          cp secucore_apk/android_plugin/plugin/build/outputs/aar/SecuDataBle-debug.aar secucore_apk/addons/secudata_ble/bin/debug/SecuDataBle-debug.aar
+          test -s secucore_apk/addons/secudata_ble/bin/debug/SecuDataBle-debug.aar
+          unzip -l secucore_apk/addons/secudata_ble/bin/debug/SecuDataBle-debug.aar | grep -E "AndroidManifest.xml|classes.jar"
+
+      - name: Download Godot 4.7.2 and export templates
+        shell: bash
+        run: |
+          curl -L --fail --retry 3 -o /tmp/godot.zip "https://godot-releases.nbg1.your-objectstorage.com/4.7.2-stable/Godot_v4.7.2-stable_linux.x86_64.zip"
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          mv /tmp/godot/Godot_v4.7.2-stable_linux.x86_64 /tmp/godot/godot
+          chmod +x /tmp/godot/godot
+
+          curl -L --fail --retry 3 -o /tmp/templates.tpz "https://godot-releases.nbg1.your-objectstorage.com/4.7.2-stable/Godot_v4.7.2-stable_export_templates.tpz"
+          rm -rf /tmp/export_templates
+          mkdir -p /tmp/export_templates
+          unzip -q /tmp/templates.tpz -d /tmp/export_templates
+
+          mkdir -p "$HOME/.local/share/godot/export_templates/4.7.2.stable"
+          cp -a /tmp/export_templates/templates/. "$HOME/.local/share/godot/export_templates/4.7.2.stable/"
+
+      - name: Run SecuCore smoke test on Linux
+        shell: bash
+        run: |
+          set -o pipefail
+          /tmp/godot/godot --headless --path secucore_apk --editor --quit 2>&1 | tee /tmp/secucore-editor.log
+          /tmp/godot/godot --headless --path secucore_apk --quit-after 5 2>&1 | tee /tmp/secucore-smoke.log
+          grep -q "SECUCORE_SMOKE_OK" /tmp/secucore-smoke.log
+
+      - name: Configure Godot Android paths
+        shell: bash
+        run: |
+          mkdir -p "$HOME/.config/godot"
+          cat > "$HOME/.config/godot/editor_settings-4.7.tres" <<EOF
+          [gd_resource type="EditorSettings" format=3]
+
+          [resource]
+          export/android/android_sdk_path = "$ANDROID_HOME"
+          export/android/java_sdk_path = "$JAVA_HOME"
+          EOF
+
+          mkdir -p "$HOME/.android"
+          keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -keypass android -dname "CN=Android Debug,O=SecuData,C=DE" -keyalg RSA -keysize 2048 -validity 10000
+
+      - name: Install Godot Android Gradle build template
+        shell: bash
+        run: |
+          /tmp/godot/godot --headless --path secucore_apk --install-android-build-template
+          test -d secucore_apk/android/build
+
+      - name: Export v0.2 BLE IDN debug APK
+        shell: bash
+        env:
+          GODOT_ANDROID_KEYSTORE_DEBUG_USER: androiddebugkey
+          GODOT_ANDROID_KEYSTORE_DEBUG_PASSWORD: android
+        run: |
+          mkdir -p secucore_apk/out
+          export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="$HOME/.android/debug.keystore"
+          /tmp/godot/godot --headless --path secucore_apk --export-debug Android out/SecuData_SecuCore_v0_2_ble_idn_debug.apk
+          test -s secucore_apk/out/SecuData_SecuCore_v0_2_ble_idn_debug.apk
+          unzip -l secucore_apk/out/SecuData_SecuCore_v0_2_ble_idn_debug.apk | grep "lib/arm64-v8a/libsecucore.android.template_debug.arm64.so"
+          ls -lh secucore_apk/out/SecuData_SecuCore_v0_2_ble_idn_debug.apk
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SecuData_SecuCore_v0_2_ble_idn_debug
+          path: secucore_apk/out/SecuData_SecuCore_v0_2_ble_idn_debug.apk
+          if-no-files-found: error
