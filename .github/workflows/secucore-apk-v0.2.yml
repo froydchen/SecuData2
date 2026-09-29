@@ -118,12 +118,6 @@ jobs:
           mkdir -p "$HOME/.android"
           keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey -keypass android -dname "CN=Android Debug,O=SecuData,C=DE" -keyalg RSA -keysize 2048 -validity 10000
 
-      - name: Install Godot Android Gradle build template
-        shell: bash
-        run: |
-          /tmp/godot/godot --headless --path secucore_apk --install-android-build-template --quit
-          test -d secucore_apk/android/build
-
       - name: Export v0.2 BLE IDN debug APK
         shell: bash
         env:
@@ -132,7 +126,7 @@ jobs:
         run: |
           mkdir -p secucore_apk/out
           export GODOT_ANDROID_KEYSTORE_DEBUG_PATH="$HOME/.android/debug.keystore"
-          /tmp/godot/godot --headless --path secucore_apk --export-debug Android out/SecuData_SecuCore_v0_2_ble_idn_debug.apk
+          /tmp/godot/godot --headless --path secucore_apk --install-android-build-template --export-debug Android out/SecuData_SecuCore_v0_2_ble_idn_debug.apk
           test -s secucore_apk/out/SecuData_SecuCore_v0_2_ble_idn_debug.apk
           unzip -l secucore_apk/out/SecuData_SecuCore_v0_2_ble_idn_debug.apk | grep "lib/arm64-v8a/libsecucore.android.template_debug.arm64.so"
           ls -lh secucore_apk/out/SecuData_SecuCore_v0_2_ble_idn_debug.apk
