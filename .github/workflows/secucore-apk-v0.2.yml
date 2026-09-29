@@ -121,7 +121,7 @@ jobs:
       - name: Install Godot Android Gradle build template
         shell: bash
         run: |
-          /tmp/godot/godot --headless --path secucore_apk --install-android-build-template
+          /tmp/godot/godot --headless --path secucore_apk --install-android-build-template --quit
           test -d secucore_apk/android/build
 
       - name: Export v0.2 BLE IDN debug APK
