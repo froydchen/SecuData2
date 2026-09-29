@@ -277,7 +277,7 @@ Dictionary SecuCore::consume_live_line(const String &raw) {
     const String upper = payload.to_upper();
 
     if (kind == "NACK") {
-        return fail_live(parsed, "SECUTEST meldet NACK in " + get_live_state());
+        return fail_live(parsed, String("SECUTEST meldet NACK in ") + get_live_state());
     }
 
     switch (live_state) {
