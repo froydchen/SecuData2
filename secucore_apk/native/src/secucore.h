@@ -22,10 +22,19 @@ public:
     Dictionary parse_direct_prx_blocks(const String &x_payload, const String &y_payload, const String &z_payload) const;
     Dictionary simulate_fix117_measurement() const;
 
+    // Kept for the small v0.2 diagnostic screen.
     Dictionary begin_identity_probe();
     Dictionary consume_identity_probe_line(const String &raw);
     String get_identity_probe_state() const;
     void reset_identity_probe();
+
+    // v0.3: complete live link bring-up:
+    // IDN? -> IDN!0 -> IDN? -> IDN1!1 -> IDN1? -> TAS!a -> MES?
+    Dictionary begin_live_init();
+    Dictionary consume_live_line(const String &raw);
+    Dictionary begin_mes_status_query();
+    String get_live_state() const;
+    void reset_live_init();
 
 private:
     enum class IdentityProbeState {
@@ -35,13 +44,37 @@ private:
         ERROR,
     };
 
+    enum class LiveInitState {
+        IDLE,
+        WAIT_IDN_INITIAL,
+        WAIT_IDN0_ASSIGN,
+        WAIT_IDN_AFTER_PSI,
+        WAIT_IDN1_ASSIGN,
+        WAIT_IDN1_VERIFY,
+        WAIT_TASA_ACK,
+        WAIT_MES_STATUS,
+        READY,
+        ERROR,
+    };
+
     IdentityProbeState identity_probe_state = IdentityProbeState::IDLE;
     String identity_probe_error;
+
+    LiveInitState live_state = LiveInitState::IDLE;
+    String live_error;
+    String live_identity;
+    String live_mes_status;
+
+    Dictionary make_live_command(const String &command, const String &message) const;
+    Dictionary fail_live(const Dictionary &parsed, const String &message);
+    static bool checksum_acceptable(const Dictionary &parsed);
+    static bool response_begins_with(const Dictionary &parsed, const String &prefix);
 
     static double parse_numeric(const String &value, bool &ok);
     static bool bitfield_is_ok(const String &marker, bool &known);
     static String strip_frame_controls(const String &value);
     static String classify_payload(const String &payload);
+    static bool is_hex_char(char32_t c);
 };
 
 }
