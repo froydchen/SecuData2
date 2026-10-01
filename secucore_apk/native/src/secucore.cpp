@@ -35,7 +35,7 @@ void SecuCore::_bind_methods() {
 }
 
 String SecuCore::get_version() const {
-    return "SecuCore C++ v0.6 - PRX Flow Fix";
+    return "SecuCore C++ v0.7 - Raw PRX";
 }
 
 String SecuCore::calculate_checksum_hex(const String &payload_including_dollar) const {
@@ -444,7 +444,18 @@ Dictionary SecuCore::make_measurement_command(const String &command, const Strin
     out["complete"] = false;
     out["success"] = false;
     out["next_command"] = command;
-    out["next_frame"] = build_frame(command);
+
+    const String upper = command.to_upper();
+    if (upper == "PRX?X" || upper == "PRX?Y" || upper == "PRX?Z") {
+        // Direct SECUTEST PRX block requests are raw CR-terminated commands.
+        // Adding "$xx" makes the device answer with .Nx=x01.
+        out["next_frame"] = command + "\r";
+        out["raw_command"] = true;
+    } else {
+        out["next_frame"] = build_frame(command);
+        out["raw_command"] = false;
+    }
+
     out["state"] = get_measurement_state();
     out["message"] = message;
     return out;
@@ -537,7 +548,6 @@ Dictionary SecuCore::consume_measurement_line(const String &raw) {
             out = make_measurement_command("TAS?", "PRX erkannt - XON bestätigen, dann Drehschalter lesen");
             out["frame"] = parsed;
             out["prx_trigger"] = true;
-            out["send_xon"] = true;
             return out;
         }
         out["message"] = "Lausche auf PRX";
@@ -568,13 +578,26 @@ Dictionary SecuCore::consume_measurement_line(const String &raw) {
             measurement_state = MeasurementState::WAIT_PRX_X;
             out = make_measurement_command("PRX?X", "Drehschalter gelesen - XON + PRX X abrufen");
             out["frame"] = parsed;
-            out["send_xon"] = true;
             out["switch_position"] = measurement_switch_position;
             out["measurement_kind"] = measurement_kind;
             return out;
         }
 
         case MeasurementState::WAIT_PRX_X: {
+            const int late_position = parse_switch_position(payload);
+            if (late_position >= 0) {
+                measurement_switch_position = late_position;
+                if (late_position == 3) {
+                    measurement_kind = "GERAET";
+                } else if (late_position == 4) {
+                    measurement_kind = "LEITUNG";
+                } else {
+                    measurement_kind = "ALLE_VORSCHLAEGE";
+                }
+                out["message"] = "Verspätete Drehschalterantwort übernommen; warte weiter auf PRX?X";
+                return out;
+            }
+
             if (!upper.begins_with("PROTOKOLL")) {
                 out["message"] = "Warte auf PRX?X-Daten";
                 return out;
@@ -583,7 +606,6 @@ Dictionary SecuCore::consume_measurement_line(const String &raw) {
             measurement_state = MeasurementState::WAIT_PRX_Y;
             out = make_measurement_command("PRX?Y", "PRX X empfangen - XON + PRX Y abrufen");
             out["frame"] = parsed;
-            out["send_xon"] = true;
             return out;
         }
 
@@ -596,7 +618,6 @@ Dictionary SecuCore::consume_measurement_line(const String &raw) {
             measurement_state = MeasurementState::WAIT_PRX_Z;
             out = make_measurement_command("PRX?Z", "PRX Y empfangen - XON + PRX Z abrufen");
             out["frame"] = parsed;
-            out["send_xon"] = true;
             return out;
         }
 
