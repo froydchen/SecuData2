@@ -26,10 +26,16 @@ void SecuCore::_bind_methods() {
     ClassDB::bind_method(D_METHOD("begin_mes_status_query"), &SecuCore::begin_mes_status_query);
     ClassDB::bind_method(D_METHOD("get_live_state"), &SecuCore::get_live_state);
     ClassDB::bind_method(D_METHOD("reset_live_init"), &SecuCore::reset_live_init);
+
+    ClassDB::bind_method(D_METHOD("arm_measurement_monitor"), &SecuCore::arm_measurement_monitor);
+    ClassDB::bind_method(D_METHOD("begin_measurement_fetch"), &SecuCore::begin_measurement_fetch);
+    ClassDB::bind_method(D_METHOD("consume_measurement_line", "raw"), &SecuCore::consume_measurement_line);
+    ClassDB::bind_method(D_METHOD("get_measurement_state"), &SecuCore::get_measurement_state);
+    ClassDB::bind_method(D_METHOD("reset_measurement_flow"), &SecuCore::reset_measurement_flow);
 }
 
 String SecuCore::get_version() const {
-    return "SecuCore C++ v0.4 · Direct BLE + Low Power";
+    return "SecuCore C++ v0.5 - Real Measurement";
 }
 
 String SecuCore::calculate_checksum_hex(const String &payload_including_dollar) const {
@@ -429,6 +435,238 @@ void SecuCore::reset_live_init() {
     live_error = "";
     live_identity = "";
     live_mes_status = "";
+}
+
+
+Dictionary SecuCore::make_measurement_command(const String &command, const String &message) const {
+    Dictionary out;
+    out["accepted"] = true;
+    out["complete"] = false;
+    out["success"] = false;
+    out["next_command"] = command;
+    out["next_frame"] = build_frame(command);
+    out["state"] = get_measurement_state();
+    out["message"] = message;
+    return out;
+}
+
+Dictionary SecuCore::fail_measurement(const Dictionary &parsed, const String &message) {
+    measurement_state = MeasurementState::ERROR;
+    Dictionary out;
+    out["frame"] = parsed;
+    out["accepted"] = true;
+    out["complete"] = true;
+    out["success"] = false;
+    out["state"] = get_measurement_state();
+    out["message"] = message;
+    return out;
+}
+
+int SecuCore::parse_switch_position(const String &payload) {
+    const String upper = payload.to_upper();
+    const int marker = upper.find("TASTEX=");
+    if (marker < 0) {
+        return -1;
+    }
+
+    const int start = marker + 7;
+    String digits;
+    for (int i = start; i < upper.length(); ++i) {
+        const char32_t ch = upper.unicode_at(i);
+        if (ch >= '0' && ch <= '9') {
+            digits += String::chr(ch);
+        } else {
+            break;
+        }
+    }
+    return digits.is_empty() ? -1 : digits.to_int();
+}
+
+void SecuCore::arm_measurement_monitor() {
+    measurement_state = MeasurementState::ARMED;
+    measurement_switch_position = -1;
+    measurement_kind = "";
+    measurement_prx_x = "";
+    measurement_prx_y = "";
+    measurement_prx_z = "";
+}
+
+Dictionary SecuCore::begin_measurement_fetch() {
+    if (measurement_state != MeasurementState::ARMED &&
+        measurement_state != MeasurementState::RESULT_READY &&
+        measurement_state != MeasurementState::ERROR) {
+        Dictionary out;
+        out["accepted"] = false;
+        out["complete"] = true;
+        out["success"] = false;
+        out["state"] = get_measurement_state();
+        out["message"] = "Messdatenabruf ist in diesem Zustand nicht möglich";
+        return out;
+    }
+
+    measurement_switch_position = -1;
+    measurement_kind = "";
+    measurement_prx_x = "";
+    measurement_prx_y = "";
+    measurement_prx_z = "";
+    measurement_state = MeasurementState::WAIT_SWITCH;
+    return make_measurement_command("TAS?", "PRX erkannt - Drehschalter vor Datenabruf lesen");
+}
+
+Dictionary SecuCore::consume_measurement_line(const String &raw) {
+    const Dictionary parsed = parse_frame(raw);
+
+    Dictionary out;
+    out["frame"] = parsed;
+    out["accepted"] = false;
+    out["complete"] = false;
+    out["success"] = false;
+    out["state"] = get_measurement_state();
+
+    if (!checksum_acceptable(parsed)) {
+        return fail_measurement(parsed, "Antwort mit falscher vorhandener Checksumme");
+    }
+
+    const String kind = String(parsed.get("kind", ""));
+    const String payload = String(parsed.get("payload", "")).strip_edges();
+    const String upper = payload.to_upper();
+
+    if (measurement_state == MeasurementState::ARMED) {
+        if (kind == "RESPONSE" && upper == "PRX") {
+            measurement_state = MeasurementState::WAIT_SWITCH;
+            out = make_measurement_command("TAS?", "PRX erkannt - Drehschalter wird zuerst gelesen");
+            out["frame"] = parsed;
+            out["prx_trigger"] = true;
+            return out;
+        }
+        out["message"] = "Lausche auf PRX";
+        return out;
+    }
+
+    if (kind == "NACK") {
+        return fail_measurement(parsed, String("NACK während Messdatenabruf in ") + get_measurement_state());
+    }
+
+    switch (measurement_state) {
+        case MeasurementState::WAIT_SWITCH: {
+            const int position = parse_switch_position(payload);
+            if (position < 0) {
+                out["message"] = "Warte auf TASTEx-Antwort";
+                return out;
+            }
+
+            measurement_switch_position = position;
+            if (position == 3) {
+                measurement_kind = "GERAET";
+            } else if (position == 4) {
+                measurement_kind = "LEITUNG";
+            } else {
+                measurement_kind = "ALLE_VORSCHLAEGE";
+            }
+
+            measurement_state = MeasurementState::WAIT_PRX_X;
+            out = make_measurement_command("PRX?X", "Drehschalter gelesen - PRX X abrufen");
+            out["frame"] = parsed;
+            out["switch_position"] = measurement_switch_position;
+            out["measurement_kind"] = measurement_kind;
+            return out;
+        }
+
+        case MeasurementState::WAIT_PRX_X: {
+            if (!upper.begins_with("PROTOKOLL")) {
+                out["message"] = "Warte auf PRX?X-Daten";
+                return out;
+            }
+            measurement_prx_x = payload;
+            measurement_state = MeasurementState::WAIT_PRX_Y;
+            out = make_measurement_command("PRX?Y", "PRX X empfangen - PRX Y abrufen");
+            out["frame"] = parsed;
+            return out;
+        }
+
+        case MeasurementState::WAIT_PRX_Y: {
+            if (!upper.begins_with("PROTOKOLL")) {
+                out["message"] = "Warte auf PRX?Y-Daten";
+                return out;
+            }
+            measurement_prx_y = payload;
+            measurement_state = MeasurementState::WAIT_PRX_Z;
+            out = make_measurement_command("PRX?Z", "PRX Y empfangen - PRX Z abrufen");
+            out["frame"] = parsed;
+            return out;
+        }
+
+        case MeasurementState::WAIT_PRX_Z: {
+            if (!upper.begins_with("PROTOKOLL")) {
+                out["message"] = "Warte auf PRX?Z-Daten";
+                return out;
+            }
+            measurement_prx_z = payload;
+
+            Dictionary measurement = parse_direct_prx_blocks(
+                measurement_prx_x,
+                measurement_prx_y,
+                measurement_prx_z
+            );
+            measurement["switch_position"] = measurement_switch_position;
+            measurement["measurement_kind"] = measurement_kind;
+
+            const String key =
+                String(measurement.get("device_date", "")) + "|" +
+                String(measurement.get("device_time", ""));
+            const bool duplicate = !key.is_empty() && key == last_measurement_key;
+            measurement["duplicate"] = duplicate;
+            if (!duplicate && !key.is_empty()) {
+                last_measurement_key = key;
+            }
+
+            measurement_state = MeasurementState::RESULT_READY;
+            out["frame"] = parsed;
+            out["accepted"] = true;
+            out["complete"] = true;
+            out["success"] = bool(measurement.get("valid", false));
+            out["state"] = get_measurement_state();
+            out["message"] = duplicate ? "Doppelter PRX-Zeitstempel verworfen" : "Echte Messdaten vollständig gelesen";
+            out["measurement"] = measurement;
+            out["duplicate"] = duplicate;
+            return out;
+        }
+
+        default:
+            out["message"] = "Kein aktiver Messdatenabruf";
+            return out;
+    }
+}
+
+String SecuCore::get_measurement_state() const {
+    switch (measurement_state) {
+        case MeasurementState::ARMED:
+            return "ARMED";
+        case MeasurementState::WAIT_SWITCH:
+            return "WAIT_SWITCH";
+        case MeasurementState::WAIT_PRX_X:
+            return "WAIT_PRX_X";
+        case MeasurementState::WAIT_PRX_Y:
+            return "WAIT_PRX_Y";
+        case MeasurementState::WAIT_PRX_Z:
+            return "WAIT_PRX_Z";
+        case MeasurementState::RESULT_READY:
+            return "RESULT_READY";
+        case MeasurementState::ERROR:
+            return "ERROR";
+        case MeasurementState::IDLE:
+        default:
+            return "IDLE";
+    }
+}
+
+void SecuCore::reset_measurement_flow() {
+    measurement_state = MeasurementState::IDLE;
+    measurement_switch_position = -1;
+    measurement_kind = "";
+    measurement_prx_x = "";
+    measurement_prx_y = "";
+    measurement_prx_z = "";
 }
 
 double SecuCore::parse_numeric(const String &value, bool &ok) {
