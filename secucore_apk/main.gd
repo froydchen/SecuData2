@@ -4,6 +4,8 @@ var core
 var ble
 var rx_buffer := ""
 var pending_command := ""
+var current_measurement: Dictionary = {}
+var post_action_mode := ""
 
 var status_label: Label
 var detail_label: Label
@@ -15,6 +17,8 @@ var init_button: Button
 var mes_button: Button
 var fetch_button: Button
 var test_button: Button
+var save_button: Button
+var discard_button: Button
 var command_timer: Timer
 
 
@@ -36,6 +40,8 @@ func _ready() -> void:
         mes_button.disabled = true
         fetch_button.disabled = true
         test_button.disabled = true
+        save_button.disabled = true
+        discard_button.disabled = true
         print("SECUCORE_CLASS_MISSING")
         return
 
@@ -119,7 +125,7 @@ func _build_ui() -> void:
     root.add_child(title)
 
     var subtitle := Label.new()
-    subtitle.text = "SecuCore Android Debug - v0.7"
+    subtitle.text = "SecuCore Android Debug - v0.8"
     subtitle.add_theme_font_size_override("font_size", 21)
     subtitle.modulate = Color("a9b7c6")
     root.add_child(subtitle)
@@ -182,6 +188,30 @@ func _build_ui() -> void:
     test_button.pressed.connect(_run_measurement)
     root.add_child(test_button)
 
+    var decision_row := HBoxContainer.new()
+    decision_row.add_theme_constant_override("separation", 10)
+    root.add_child(decision_row)
+
+    discard_button = Button.new()
+    discard_button.text = "VERWERFEN"
+    discard_button.custom_minimum_size.y = 58
+    discard_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    discard_button.add_theme_font_size_override("font_size", 17)
+    discard_button.add_theme_color_override("font_color", Color("ff7885"))
+    discard_button.disabled = true
+    discard_button.pressed.connect(_discard_current_measurement)
+    decision_row.add_child(discard_button)
+
+    save_button = Button.new()
+    save_button.text = "SPEICHERN"
+    save_button.custom_minimum_size.y = 58
+    save_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    save_button.add_theme_font_size_override("font_size", 17)
+    save_button.add_theme_color_override("font_color", Color("68e39a"))
+    save_button.disabled = true
+    save_button.pressed.connect(_save_current_measurement)
+    decision_row.add_child(save_button)
+
     measurement_label = Label.new()
     measurement_label.text = "Bereit. Keine aktive Gerätekommunikation."
     measurement_label.add_theme_font_size_override("font_size", 20)
@@ -208,8 +238,12 @@ func _connect_ble() -> void:
     command_timer.stop()
     pending_command = ""
     rx_buffer = ""
+    current_measurement = {}
+    post_action_mode = ""
     core.reset_live_init()
     core.reset_measurement_flow()
+    core.reset_post_measurement()
+    _set_decision_buttons(false)
     init_button.disabled = true
     mes_button.disabled = true
     fetch_button.disabled = true
@@ -234,9 +268,13 @@ func _on_ble_state_changed(state: String, detail: String) -> void:
     elif state == "DISCONNECTED":
         command_timer.stop()
         pending_command = ""
+        current_measurement = {}
+        post_action_mode = ""
+        _set_decision_buttons(false)
         if core != null:
             core.reset_live_init()
             core.reset_measurement_flow()
+            core.reset_post_measurement()
         init_button.disabled = true
         mes_button.disabled = true
         fetch_button.disabled = true
@@ -262,8 +300,12 @@ func _start_live_init() -> void:
         return
 
     rx_buffer = ""
+    current_measurement = {}
+    post_action_mode = ""
+    _set_decision_buttons(false)
     core.reset_live_init()
     core.reset_measurement_flow()
+    core.reset_post_measurement()
     init_button.disabled = true
     mes_button.disabled = true
     fetch_button.disabled = true
@@ -272,7 +314,7 @@ func _start_live_init() -> void:
 
 
 func _refresh_mes_status() -> void:
-    if ble == null or core == null:
+    if ble == null or core == null or not current_measurement.is_empty():
         return
 
     var action: Dictionary = core.begin_mes_status_query()
@@ -282,7 +324,6 @@ func _refresh_mes_status() -> void:
         return
 
     mes_button.disabled = true
-    fetch_button.disabled = true
     _send_core_action(action)
 
 
@@ -339,6 +380,11 @@ func _consume_rx_line(line: String) -> void:
     var payload := str(preview.get("payload", "")).strip_edges()
     var upper := payload.to_upper()
     var measurement_state := str(core.get_measurement_state())
+    var post_state := str(core.get_post_measurement_state())
+
+    if post_state in ["WAIT_RESET_ACK", "WAIT_TASA_ACK"]:
+        _consume_post_measurement_line(line)
+        return
 
     var is_prx_trigger := measurement_state == "ARMED" and upper == "PRX"
     var measurement_command_pending := pending_command in ["TAS?", "PRX?X", "PRX?Y", "PRX?Z"]
@@ -392,7 +438,6 @@ func _consume_live_line(line: String) -> void:
         measurement_label.modulate = Color("68e39a")
         init_button.disabled = false
         mes_button.disabled = false
-        fetch_button.disabled = true
         print("SECUCORE_LIVE_READY: " + identity + " | " + mes_status)
         return
 
@@ -405,7 +450,6 @@ func _consume_live_line(line: String) -> void:
         measurement_label.modulate = Color("ff7885")
         init_button.disabled = false
         mes_button.disabled = true
-        fetch_button.disabled = true
 
 
 func _consume_measurement_line(line: String) -> void:
@@ -443,15 +487,17 @@ func _consume_measurement_line(line: String) -> void:
                 "DUPLIKAT VERWORFEN"
                 + "\nSECUTEST-Zeit: " + str(measurement.get("device_date", ""))
                 + " " + str(measurement.get("device_time", ""))
+                + "\nLausche wieder auf PRX."
             )
             measurement_label.modulate = Color("ffcc66")
+            core.arm_measurement_monitor()
+            mes_button.disabled = false
         else:
-            _show_real_measurement(measurement)
-
-        # Passiv wieder lauschen. Kein Reset/Save/Discard wird hier vorweggenommen.
-        core.arm_measurement_monitor()
-        fetch_button.disabled = true
-        mes_button.disabled = false
+            current_measurement = measurement.duplicate(true)
+            _show_real_measurement(current_measurement)
+            _set_decision_buttons(true)
+            init_button.disabled = true
+            mes_button.disabled = true
         return
 
     measurement_label.text = (
@@ -460,7 +506,7 @@ func _consume_measurement_line(line: String) -> void:
         + "\nState: " + str(result.get("state", ""))
     )
     measurement_label.modulate = Color("ff7885")
-    fetch_button.disabled = true
+    core.arm_measurement_monitor()
     mes_button.disabled = false
 
 
@@ -471,17 +517,168 @@ func _show_real_measurement(measurement: Dictionary) -> void:
 
     var ok: bool = bool(measurement.get("is_ok", false))
     measurement_label.modulate = Color("68e39a") if ok else Color("ff7885")
-    measurement_label.text = (
-        "ECHTE MESSUNG - " + ("OK" if ok else "NICHT OK")
-        + "\nDrehschalter: " + str(position) + " - " + kind_text
-        + "\nSECUTEST-Zeit: " + str(measurement.get("device_date", "")) + " " + str(measurement.get("device_time", ""))
-        + "\nRPE: " + _fmt(measurement.get("rpe"))
-        + "\nRISO: " + _fmt(measurement.get("rins")) + " MΩ"
-        + "\nIPE: " + _fmt(measurement.get("ipe")) + " mA"
-        + "\nU: " + _fmt(measurement.get("u")) + " V"
-        + "\n\nLausche wieder auf PRX."
-    )
+
+    var lines: Array[String] = []
+    lines.append("ECHTE MESSUNG - " + ("OK" if ok else "NICHT OK"))
+    lines.append("Drehschalter: " + str(position) + " - " + kind_text)
+    lines.append("SECUTEST-Zeit: " + str(measurement.get("device_date", "")) + " " + str(measurement.get("device_time", "")))
+
+    if measurement.get("rpe") != null:
+        var rpe_line := "RPE: " + _fmt(measurement.get("rpe")) + " Ω"
+        if measurement.get("rpe_limit") != null:
+            rpe_line += "   GW " + _fmt(measurement.get("rpe_limit")) + " Ω"
+        lines.append(rpe_line)
+    else:
+        lines.append("RPE: nicht gemessen")
+
+    if measurement.get("drpe") != null:
+        var drpe_line := "ΔRPE: " + _fmt(measurement.get("drpe")) + " Ω"
+        if measurement.get("drpe_limit") != null:
+            drpe_line += "   GW " + _fmt(measurement.get("drpe_limit")) + " Ω"
+        lines.append(drpe_line)
+
+    if measurement.get("rins") != null:
+        var rins_line := "RISO: " + _fmt(measurement.get("rins")) + " MΩ"
+        if measurement.get("rins_limit") != null:
+            rins_line += "   GW " + _fmt(measurement.get("rins_limit")) + " MΩ"
+        lines.append(rins_line)
+
+    if measurement.get("uiso") != null:
+        var uiso_line := "UISO: " + _fmt(measurement.get("uiso")) + " V"
+        if measurement.get("uiso_limit") != null:
+            uiso_line += "   GW " + _fmt(measurement.get("uiso_limit")) + " V"
+        lines.append(uiso_line)
+
+    if measurement.get("ipe") != null:
+        var ipe_line := "IPE: " + _fmt(measurement.get("ipe")) + " mA"
+        if measurement.get("ipe_limit") != null:
+            ipe_line += "   GW " + _fmt(measurement.get("ipe_limit")) + " mA"
+        lines.append(ipe_line)
+
+    if measurement.get("u") != null:
+        var u_line := "U: " + _fmt(measurement.get("u")) + " V"
+        if measurement.get("u_limit") != null:
+            u_line += "   GW " + _fmt(measurement.get("u_limit")) + " V"
+        lines.append(u_line)
+
+    lines.append("")
+    lines.append("Speichern oder Verwerfen.")
+
+    measurement_label.text = "\n".join(lines)
     print("SECUCORE_REAL_MEASUREMENT: " + str(measurement))
+
+
+func _set_decision_buttons(enabled: bool) -> void:
+    save_button.disabled = not enabled
+    discard_button.disabled = not enabled
+
+
+func _save_current_measurement() -> void:
+    if current_measurement.is_empty():
+        return
+
+    if not _persist_measurement(current_measurement):
+        measurement_label.text += "\n\nSPEICHERN FEHLGESCHLAGEN - lokale Datei konnte nicht geöffnet werden."
+        measurement_label.modulate = Color("ff7885")
+        return
+
+    _begin_post_measurement_action("GESPEICHERT")
+
+
+func _discard_current_measurement() -> void:
+    if current_measurement.is_empty():
+        return
+    _begin_post_measurement_action("VERWORFEN")
+
+
+func _persist_measurement(measurement: Dictionary) -> bool:
+    var path := "user://secudata_measurements.jsonl"
+    var file: FileAccess
+
+    if FileAccess.file_exists(path):
+        file = FileAccess.open(path, FileAccess.READ_WRITE)
+        if file != null:
+            file.seek_end()
+    else:
+        file = FileAccess.open(path, FileAccess.WRITE)
+
+    if file == null:
+        return false
+
+    var record := measurement.duplicate(true)
+    record["saved_at"] = Time.get_datetime_string_from_system()
+    record["source"] = "SecuCore Android v0.8"
+    file.store_line(JSON.stringify(record))
+    file.flush()
+    file.close()
+    return true
+
+
+func _begin_post_measurement_action(mode: String) -> void:
+    if current_measurement.is_empty():
+        return
+
+    post_action_mode = mode
+    _set_decision_buttons(false)
+    init_button.disabled = true
+    mes_button.disabled = true
+
+    var switch_position := int(current_measurement.get("switch_position", -1))
+    core.reset_post_measurement()
+    var action: Dictionary = core.begin_post_measurement_reset(switch_position)
+    _send_core_action(action)
+
+
+func _consume_post_measurement_line(line: String) -> void:
+    var result: Dictionary = core.consume_post_measurement_line(line)
+    var parsed: Dictionary = result.get("frame", {})
+    var checksum_state := str(parsed.get("checksum_state", "?"))
+
+    frame_label.text = (
+        "RX: " + str(parsed.get("normalized", line))
+        + "\nChecksum: " + checksum_state
+        + " - Post: " + str(result.get("state", ""))
+    )
+
+    if not bool(result.get("accepted", false)):
+        return
+
+    command_timer.stop()
+    pending_command = ""
+
+    if result.has("next_frame"):
+        _send_core_action(result)
+        return
+
+    if bool(result.get("complete", false)) and bool(result.get("success", false)):
+        var completed_mode := post_action_mode
+        current_measurement = {}
+        post_action_mode = ""
+        core.reset_post_measurement()
+        core.arm_measurement_monitor()
+        init_button.disabled = false
+        mes_button.disabled = false
+        _set_decision_buttons(false)
+        measurement_label.text = (
+            completed_mode
+            + "\nReset/Remote-Modus abgeschlossen."
+            + "\nLausche wieder auf PRX ..."
+        )
+        measurement_label.modulate = Color("68e39a") if completed_mode == "GESPEICHERT" else Color("c8d2dc")
+        return
+
+    if bool(result.get("complete", false)):
+        measurement_label.text = (
+            post_action_mode
+            + ", ABER RESET FEHLGESCHLAGEN"
+            + "\n" + str(result.get("message", "unbekannt"))
+            + "\nBLE bitte neu verbinden."
+        )
+        measurement_label.modulate = Color("ff7885")
+        current_measurement = {}
+        post_action_mode = ""
+        core.reset_post_measurement()
+        _set_decision_buttons(false)
 
 
 func _on_command_timeout() -> void:
@@ -489,6 +686,20 @@ func _on_command_timeout() -> void:
     pending_command = ""
 
     if core == null:
+        return
+
+    var post_state := str(core.get_post_measurement_state())
+    if post_state in ["WAIT_RESET_ACK", "WAIT_TASA_ACK"]:
+        measurement_label.text = (
+            post_action_mode
+            + ", ABER TIMEOUT bei " + timed_out
+            + "\nBLE bitte neu verbinden."
+        )
+        measurement_label.modulate = Color("ffcc66")
+        current_measurement = {}
+        post_action_mode = ""
+        core.reset_post_measurement()
+        _set_decision_buttons(false)
         return
 
     if timed_out in ["TAS?", "PRX?X", "PRX?Y", "PRX?Z"]:
@@ -500,7 +711,6 @@ func _on_command_timeout() -> void:
         )
         measurement_label.modulate = Color("ffcc66")
         core.arm_measurement_monitor()
-        fetch_button.disabled = true
         mes_button.disabled = false
         return
 
@@ -515,7 +725,6 @@ func _on_command_timeout() -> void:
     core.reset_measurement_flow()
     init_button.disabled = false if ble != null and str(ble.getConnectionState()) == "READY" else true
     mes_button.disabled = true
-    fetch_button.disabled = true
 
 
 func _run_measurement() -> void:
@@ -528,17 +737,7 @@ func _run_measurement() -> void:
         measurement_label.modulate = Color("ff7885")
         return
 
-    var ok: bool = bool(result.get("is_ok", false))
-    measurement_label.modulate = Color("68e39a") if ok else Color("ff7885")
-    measurement_label.text = (
-        ("OK" if ok else "NICHT OK")
-        + "\nQuelle: " + str(result.get("source", ""))
-        + "\nSECUTEST-Zeit: " + str(result.get("device_date", "")) + " " + str(result.get("device_time", ""))
-        + "\nRPE: " + _fmt(result.get("rpe"))
-        + "\nRISO: " + _fmt(result.get("rins")) + " MΩ"
-        + "\nIPE: " + _fmt(result.get("ipe")) + " mA"
-        + "\nU: " + _fmt(result.get("u")) + " V"
-    )
+    _show_real_measurement(result)
 
 
 func _fmt(value) -> String:
@@ -553,9 +752,12 @@ func _notification(what: int) -> void:
             command_timer.stop()
         pending_command = ""
         rx_buffer = ""
+        current_measurement = {}
+        post_action_mode = ""
         if core != null:
             core.reset_live_init()
             core.reset_measurement_flow()
+            core.reset_post_measurement()
         if ble != null:
             ble.disconnect()
     elif what == NOTIFICATION_APPLICATION_RESUMED:
