@@ -2,6 +2,7 @@
 
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/core/math.hpp>
+#include <godot_cpp/variant/array.hpp>
 #include <godot_cpp/variant/packed_string_array.hpp>
 #include <godot_cpp/variant/variant.hpp>
 
@@ -32,10 +33,15 @@ void SecuCore::_bind_methods() {
     ClassDB::bind_method(D_METHOD("consume_measurement_line", "raw"), &SecuCore::consume_measurement_line);
     ClassDB::bind_method(D_METHOD("get_measurement_state"), &SecuCore::get_measurement_state);
     ClassDB::bind_method(D_METHOD("reset_measurement_flow"), &SecuCore::reset_measurement_flow);
+
+    ClassDB::bind_method(D_METHOD("begin_post_measurement_reset", "switch_position"), &SecuCore::begin_post_measurement_reset);
+    ClassDB::bind_method(D_METHOD("consume_post_measurement_line", "raw"), &SecuCore::consume_post_measurement_line);
+    ClassDB::bind_method(D_METHOD("get_post_measurement_state"), &SecuCore::get_post_measurement_state);
+    ClassDB::bind_method(D_METHOD("reset_post_measurement"), &SecuCore::reset_post_measurement);
 }
 
 String SecuCore::get_version() const {
-    return "SecuCore C++ v0.7 - Raw PRX";
+    return "SecuCore C++ v0.8 - Save/Discard";
 }
 
 String SecuCore::calculate_checksum_hex(const String &payload_including_dollar) const {
@@ -694,6 +700,126 @@ void SecuCore::reset_measurement_flow() {
     measurement_prx_z = "";
 }
 
+
+Dictionary SecuCore::make_post_command(const String &command, const String &message) const {
+    Dictionary out;
+    out["accepted"] = true;
+    out["complete"] = false;
+    out["success"] = false;
+    out["next_command"] = command;
+    out["next_frame"] = build_frame(command);
+    out["state"] = get_post_measurement_state();
+    out["message"] = message;
+    return out;
+}
+
+Dictionary SecuCore::fail_post_measurement(const Dictionary &parsed, const String &message) {
+    post_measurement_state = PostMeasurementState::ERROR;
+
+    Dictionary out;
+    out["frame"] = parsed;
+    out["accepted"] = true;
+    out["complete"] = true;
+    out["success"] = false;
+    out["state"] = get_post_measurement_state();
+    out["message"] = message;
+    return out;
+}
+
+Dictionary SecuCore::begin_post_measurement_reset(int switch_position) {
+    post_measurement_switch_position = switch_position;
+
+    if (switch_position == 3) {
+        post_measurement_state = PostMeasurementState::WAIT_RESET_ACK;
+        return make_post_command("RST!3", "Gerätemodus zurücksetzen");
+    }
+    if (switch_position == 4) {
+        post_measurement_state = PostMeasurementState::WAIT_RESET_ACK;
+        return make_post_command("RST!4", "Leitungsmodus zurücksetzen");
+    }
+
+    // Other switch positions intentionally do not get a guessed reset mode.
+    post_measurement_state = PostMeasurementState::WAIT_TASA_ACK;
+    return make_post_command("TAS!a", "Keine Reset-Zuordnung für diese Schalterstellung - Remote-Modus neu aktivieren");
+}
+
+Dictionary SecuCore::consume_post_measurement_line(const String &raw) {
+    const Dictionary parsed = parse_frame(raw);
+
+    Dictionary out;
+    out["frame"] = parsed;
+    out["accepted"] = false;
+    out["complete"] = false;
+    out["success"] = false;
+    out["state"] = get_post_measurement_state();
+
+    if (!checksum_acceptable(parsed)) {
+        return fail_post_measurement(parsed, "Antwort mit falscher vorhandener Checksumme");
+    }
+
+    const String kind = String(parsed.get("kind", ""));
+    const String payload = String(parsed.get("payload", "")).strip_edges();
+    const String upper = payload.to_upper();
+
+    if (kind == "NACK") {
+        return fail_post_measurement(parsed, String("NACK bei Post-Messungs-Aktion in ") + get_post_measurement_state());
+    }
+
+    switch (post_measurement_state) {
+        case PostMeasurementState::WAIT_RESET_ACK: {
+            if (kind != "ACK" && !upper.begins_with("RST")) {
+                out["message"] = "Warte auf Reset-Bestätigung";
+                return out;
+            }
+            post_measurement_state = PostMeasurementState::WAIT_TASA_ACK;
+            out = make_post_command("TAS!a", "Reset bestätigt - Remote-Modus neu aktivieren");
+            out["frame"] = parsed;
+            return out;
+        }
+
+        case PostMeasurementState::WAIT_TASA_ACK: {
+            if (kind != "ACK" && !upper.begins_with("TAS")) {
+                out["message"] = "Warte auf TAS!a-Bestätigung";
+                return out;
+            }
+            post_measurement_state = PostMeasurementState::COMPLETE;
+            out["frame"] = parsed;
+            out["accepted"] = true;
+            out["complete"] = true;
+            out["success"] = true;
+            out["state"] = get_post_measurement_state();
+            out["message"] = "Post-Messungs-Aktion abgeschlossen";
+            out["switch_position"] = post_measurement_switch_position;
+            return out;
+        }
+
+        default:
+            out["message"] = "Keine Post-Messungs-Aktion aktiv";
+            return out;
+    }
+}
+
+String SecuCore::get_post_measurement_state() const {
+    switch (post_measurement_state) {
+        case PostMeasurementState::WAIT_RESET_ACK:
+            return "WAIT_RESET_ACK";
+        case PostMeasurementState::WAIT_TASA_ACK:
+            return "WAIT_TASA_ACK";
+        case PostMeasurementState::COMPLETE:
+            return "COMPLETE";
+        case PostMeasurementState::ERROR:
+            return "ERROR";
+        case PostMeasurementState::IDLE:
+        default:
+            return "IDLE";
+    }
+}
+
+void SecuCore::reset_post_measurement() {
+    post_measurement_state = PostMeasurementState::IDLE;
+    post_measurement_switch_position = -1;
+}
+
 double SecuCore::parse_numeric(const String &value, bool &ok) {
     String out;
     bool started = false;
@@ -774,61 +900,118 @@ Dictionary SecuCore::parse_direct_prx_blocks(
     const bool is_ok = bitfield_is_ok(x[1], result_known);
 
     bool rpe_ok = false;
-    const double rpe = parse_numeric(y[1], rpe_ok);
+    const double rpe = y.size() > 1 ? parse_numeric(y[1], rpe_ok) : 0.0;
+    bool rpe_limit_ok = false;
+    const double rpe_limit = y.size() > 2 ? parse_numeric(y[2], rpe_limit_ok) : 0.0;
+    bool drpe_ok = false;
+    const double drpe = y.size() > 3 ? parse_numeric(y[3], drpe_ok) : 0.0;
+    bool drpe_limit_ok = false;
+    const double drpe_limit = y.size() > 4 ? parse_numeric(y[4], drpe_limit_ok) : 0.0;
 
     bool rins_ok = false;
     const double rins = y.size() > 5 ? parse_numeric(y[5], rins_ok) : 0.0;
+    bool rins_limit_ok = false;
+    const double rins_limit = y.size() > 6 ? parse_numeric(y[6], rins_limit_ok) : 0.0;
+
+    bool uiso_ok = false;
+    const double uiso = y.size() > 7 ? parse_numeric(y[7], uiso_ok) : 0.0;
+    bool uiso_limit_ok = false;
+    const double uiso_limit = y.size() > 8 ? parse_numeric(y[8], uiso_limit_ok) : 0.0;
 
     bool ipe_ok = false;
+    bool ipe_limit_ok = false;
     double ipe = 0.0;
+    double ipe_limit = 0.0;
     for (int i = 1; i < y.size(); ++i) {
         if (!y[i].to_upper().contains(String("MA"))) {
             continue;
         }
         bool n_ok = false;
         const double n = parse_numeric(y[i], n_ok);
-        if (n_ok) {
+        if (!n_ok) {
+            continue;
+        }
+
+        const String trimmed = y[i].strip_edges();
+        const bool is_limit = trimmed.begins_with(String("<")) || trimmed.begins_with(String(">"));
+        if (is_limit) {
+            if (!ipe_limit_ok) {
+                ipe_limit = n;
+                ipe_limit_ok = true;
+            }
+        } else if (!ipe_ok) {
             ipe = n;
             ipe_ok = true;
-            if (!y[i].strip_edges().begins_with(String("<")) && !y[i].strip_edges().begins_with(String(">"))) {
-                break;
-            }
         }
+    }
+    if (!ipe_ok && ipe_limit_ok) {
+        // Preserve the old behaviour if only a threshold is present.
+        ipe = ipe_limit;
+        ipe_ok = true;
     }
 
     bool u_ok = false;
+    bool u_limit_ok = false;
     double mains_u = 0.0;
-    for (int i = 1; i + 1 < z.size(); ++i) {
-        if (!z[i].to_upper().contains(String("V")) || !z[i + 1].to_upper().contains("V")) {
-            continue;
-        }
-        bool actual_ok = false;
-        bool limit_ok = false;
-        const double actual = parse_numeric(z[i], actual_ok);
-        const double limit = parse_numeric(z[i + 1], limit_ok);
-        if (actual_ok && limit_ok && actual >= 100.0 && actual <= 300.0 && limit >= 240.0 && limit <= 260.0) {
-            mains_u = actual;
-            u_ok = true;
-            break;
-        }
-    }
+    double mains_u_limit = 0.0;
 
-    if (!u_ok) {
-        for (int i = 1; i + 1 < y.size(); ++i) {
-            if (!y[i].to_upper().contains("V") || !y[i + 1].to_upper().contains("V")) {
+    auto scan_voltage_pair = [&](const PackedStringArray &fields) {
+        for (int i = 1; i + 1 < fields.size(); ++i) {
+            if (!fields[i].to_upper().contains(String("V")) || !fields[i + 1].to_upper().contains(String("V"))) {
                 continue;
             }
             bool actual_ok = false;
             bool limit_ok = false;
-            const double actual = parse_numeric(y[i], actual_ok);
-            const double limit = parse_numeric(y[i + 1], limit_ok);
+            const double actual = parse_numeric(fields[i], actual_ok);
+            const double limit = parse_numeric(fields[i + 1], limit_ok);
             if (actual_ok && limit_ok && actual >= 100.0 && actual <= 300.0 && limit >= 240.0 && limit <= 260.0) {
                 mains_u = actual;
+                mains_u_limit = limit;
                 u_ok = true;
-                break;
+                u_limit_ok = true;
+                return;
             }
         }
+    };
+
+    scan_voltage_pair(z);
+    if (!u_ok) {
+        scan_voltage_pair(y);
     }
+
+    Array values;
+    auto append_values = [&](const PackedStringArray &fields, const String &block) {
+        for (int i = 1; i < fields.size(); ++i) {
+            const String raw_value = fields[i].strip_edges();
+            if (raw_value.is_empty()) {
+                continue;
+            }
+            Dictionary item;
+            item["block"] = block;
+            item["index"] = i;
+            item["value"] = raw_value;
+
+            if (block == "Y") {
+                switch (i) {
+                    case 1: item["label"] = "RPE"; break;
+                    case 2: item["label"] = "GW RPE"; break;
+                    case 3: item["label"] = "Delta RPE"; break;
+                    case 4: item["label"] = "GW Delta RPE"; break;
+                    case 5: item["label"] = "RISO"; break;
+                    case 6: item["label"] = "GW RISO"; break;
+                    case 7: item["label"] = "UISO"; break;
+                    case 8: item["label"] = "GW UISO"; break;
+                    default: item["label"] = String("Y") + String::num_int64(i); break;
+                }
+            } else {
+                item["label"] = block + String::num_int64(i);
+            }
+            values.push_back(item);
+        }
+    };
+
+    append_values(y, "Y");
+    append_values(z, "Z");
 
     out["valid"] = true;
     out["source"] = "SECUTEST_DIRECT_PRX";
@@ -836,34 +1019,30 @@ Dictionary SecuCore::parse_direct_prx_blocks(
     out["device_date"] = x[x.size() - 2].strip_edges();
     out["device_time"] = x[x.size() - 1].strip_edges();
     out["is_ok"] = result_known ? is_ok : true;
+    out["raw_x"] = x_payload;
+    out["raw_y"] = y_payload;
+    out["raw_z"] = z_payload;
+    out["values"] = values;
 
-    if (rpe_ok) {
-        out["rpe"] = rpe;
-    } else {
-        out["rpe"] = Variant();
-    }
-    if (rins_ok) {
-        out["rins"] = rins;
-    } else {
-        out["rins"] = Variant();
-    }
-    if (ipe_ok) {
-        out["ipe"] = ipe;
-    } else {
-        out["ipe"] = Variant();
-    }
-    if (u_ok) {
-        out["u"] = mains_u;
-    } else {
-        out["u"] = Variant();
-    }
+    out["rpe"] = rpe_ok ? Variant(rpe) : Variant();
+    out["rpe_limit"] = rpe_limit_ok ? Variant(rpe_limit) : Variant();
+    out["drpe"] = drpe_ok ? Variant(drpe) : Variant();
+    out["drpe_limit"] = drpe_limit_ok ? Variant(drpe_limit) : Variant();
+    out["rins"] = rins_ok ? Variant(rins) : Variant();
+    out["rins_limit"] = rins_limit_ok ? Variant(rins_limit) : Variant();
+    out["uiso"] = uiso_ok ? Variant(uiso) : Variant();
+    out["uiso_limit"] = uiso_limit_ok ? Variant(uiso_limit) : Variant();
+    out["ipe"] = ipe_ok ? Variant(ipe) : Variant();
+    out["ipe_limit"] = ipe_limit_ok ? Variant(ipe_limit) : Variant();
+    out["u"] = u_ok ? Variant(mains_u) : Variant();
+    out["u_limit"] = u_limit_ok ? Variant(mains_u_limit) : Variant();
 
     return out;
 }
 
 Dictionary SecuCore::simulate_fix117_measurement() const {
     const String x = "Protokollx=XXXXXXXX;000021000000510000000C000000060000220000;;;15.08.26;12:47:31";
-    const String y = "Protokollx=XXXXXXXX;;;;;>+310.0MΩ;>2.000MΩ; +0527V ;+0500V ;;;;;;; +0.000mA;<0.500mA;;;;;;;;";
+    const String y = "Protokollx=XXXXXXXX;+0.123Ω;+0.300Ω;;;>+310.0MΩ;>2.000MΩ; +0527V ;+0500V ;;;;;;; +0.000mA;<0.500mA;;;;;;;;";
     const String z = "Protokollx=XXXXXXXX;;;;;;;;;;;;;;;;;;;; +197.2V ;+253.0V ;;";
     return parse_direct_prx_blocks(x, y, z);
 }
@@ -875,6 +1054,7 @@ Dictionary SecuCore::self_test() const {
     const Dictionary measurement = simulate_fix117_measurement();
 
     const bool valid = bool(measurement.get("valid", false));
+    const double rpe = double(measurement.get("rpe", 999.0));
     const double rins = double(measurement.get("rins", 0.0));
     const double ipe = double(measurement.get("ipe", 999.0));
     const double u = double(measurement.get("u", 0.0));
@@ -882,6 +1062,7 @@ Dictionary SecuCore::self_test() const {
 
     const bool parser_ok =
         valid &&
+        Math::is_equal_approx(rpe, 0.123) &&
         Math::is_equal_approx(rins, 310.0) &&
         Math::is_equal_approx(ipe, 0.0) &&
         Math::is_equal_approx(u, 197.2) &&
@@ -903,7 +1084,7 @@ Dictionary SecuCore::self_test() const {
 
     out["ok"] = checksum_ok && parser_ok && frame_parser_ok;
     out["detail"] =
-        String("TX checksum + fix117 PRX + optional RX checksum parser: ") +
+        String("TX checksum + PRX parser incl. RPE + optional RX checksum: ") +
         String((checksum_ok && parser_ok && frame_parser_ok) ? "OK" : "FEHLER");
 
     return out;
