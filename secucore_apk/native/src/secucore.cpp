@@ -534,9 +534,10 @@ Dictionary SecuCore::consume_measurement_line(const String &raw) {
     if (measurement_state == MeasurementState::ARMED) {
         if (kind == "RESPONSE" && upper == "PRX") {
             measurement_state = MeasurementState::WAIT_SWITCH;
-            out = make_measurement_command("TAS?", "PRX erkannt - Drehschalter wird zuerst gelesen");
+            out = make_measurement_command("TAS?", "PRX erkannt - XON bestätigen, dann Drehschalter lesen");
             out["frame"] = parsed;
             out["prx_trigger"] = true;
+            out["send_xon"] = true;
             return out;
         }
         out["message"] = "Lausche auf PRX";
