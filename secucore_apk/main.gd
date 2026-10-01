@@ -311,6 +311,12 @@ func _send_core_action(action: Dictionary) -> void:
     if frame.is_empty():
         return
 
+    var wire_text := frame
+    var tx_prefix := ""
+    if bool(action.get("send_xon", false)):
+        wire_text = String.chr(0x11) + frame
+        tx_prefix = "XON + "
+
     pending_command = command
     measurement_label.text = (
         str(action.get("message", "SECUTEST-Kommunikation"))
@@ -318,9 +324,9 @@ func _send_core_action(action: Dictionary) -> void:
         + str(action.get("state", ""))
     )
     measurement_label.modulate = Color("c8d2dc")
-    frame_label.text = "TX: " + command + "\n" + frame.replace("\r", "\\r")
+    frame_label.text = "TX: " + tx_prefix + command + "\n" + frame.replace("\r", "\\r")
 
-    if not bool(ble.sendText(frame)):
+    if not bool(ble.sendText(wire_text)):
         pending_command = ""
         measurement_label.text = command + " konnte nicht über BLE gesendet werden."
         measurement_label.modulate = Color("ff7885")
