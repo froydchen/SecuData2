@@ -119,7 +119,7 @@ func _build_ui() -> void:
     root.add_child(title)
 
     var subtitle := Label.new()
-    subtitle.text = "SecuCore Android Debug - v0.6"
+    subtitle.text = "SecuCore Android Debug - v0.7"
     subtitle.add_theme_font_size_override("font_size", 21)
     subtitle.modulate = Color("a9b7c6")
     root.add_child(subtitle)
@@ -298,10 +298,7 @@ func _send_core_action(action: Dictionary) -> void:
         return
 
     var wire_text := frame
-    var tx_prefix := ""
-    if bool(action.get("send_xon", false)):
-        wire_text = String.chr(0x11) + frame
-        tx_prefix = "XON + "
+    var tx_prefix := "RAW " if bool(action.get("raw_command", false)) else ""
 
     pending_command = command
     measurement_label.text = (
