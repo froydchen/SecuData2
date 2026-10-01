@@ -119,7 +119,7 @@ func _build_ui() -> void:
     root.add_child(title)
 
     var subtitle := Label.new()
-    subtitle.text = "SecuCore Android Debug - v0.5"
+    subtitle.text = "SecuCore Android Debug - v0.6"
     subtitle.add_theme_font_size_override("font_size", 21)
     subtitle.modulate = Color("a9b7c6")
     root.add_child(subtitle)
@@ -168,7 +168,7 @@ func _build_ui() -> void:
     root.add_child(mes_button)
 
     fetch_button = Button.new()
-    fetch_button.text = "ECHTE MESSDATEN JETZT ABRUFEN"
+    fetch_button.text = "WARTET AUF PRX - AUTOMATISCH"
     fetch_button.custom_minimum_size.y = 50
     fetch_button.add_theme_font_size_override("font_size", 16)
     fetch_button.disabled = true
@@ -287,22 +287,8 @@ func _refresh_mes_status() -> void:
 
 
 func _start_measurement_fetch() -> void:
-    if ble == null or core == null:
-        return
-    if str(ble.getConnectionState()) != "READY":
-        measurement_label.text = "BLE ist noch nicht bereit."
-        measurement_label.modulate = Color("ffcc66")
-        return
-
-    var action: Dictionary = core.begin_measurement_fetch()
-    if not bool(action.get("accepted", false)):
-        measurement_label.text = str(action.get("message", "Messdatenabruf nicht möglich"))
-        measurement_label.modulate = Color("ffcc66")
-        return
-
-    fetch_button.disabled = true
-    mes_button.disabled = true
-    _send_core_action(action)
+    measurement_label.text = "Messdaten werden nur nach einem echten PRX-Fertigsignal automatisch abgerufen."
+    measurement_label.modulate = Color("ffcc66")
 
 
 func _send_core_action(action: Dictionary) -> void:
@@ -409,7 +395,7 @@ func _consume_live_line(line: String) -> void:
         measurement_label.modulate = Color("68e39a")
         init_button.disabled = false
         mes_button.disabled = false
-        fetch_button.disabled = false
+        fetch_button.disabled = true
         print("SECUCORE_LIVE_READY: " + identity + " | " + mes_status)
         return
 
@@ -467,7 +453,7 @@ func _consume_measurement_line(line: String) -> void:
 
         # Passiv wieder lauschen. Kein Reset/Save/Discard wird hier vorweggenommen.
         core.arm_measurement_monitor()
-        fetch_button.disabled = false
+        fetch_button.disabled = true
         mes_button.disabled = false
         return
 
@@ -477,7 +463,7 @@ func _consume_measurement_line(line: String) -> void:
         + "\nState: " + str(result.get("state", ""))
     )
     measurement_label.modulate = Color("ff7885")
-    fetch_button.disabled = false
+    fetch_button.disabled = true
     mes_button.disabled = false
 
 
@@ -517,7 +503,7 @@ func _on_command_timeout() -> void:
         )
         measurement_label.modulate = Color("ffcc66")
         core.arm_measurement_monitor()
-        fetch_button.disabled = false
+        fetch_button.disabled = true
         mes_button.disabled = false
         return
 
