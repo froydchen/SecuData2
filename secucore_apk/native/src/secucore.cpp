@@ -449,7 +449,7 @@ Dictionary SecuCore::make_measurement_command(const String &command, const Strin
     if (upper == "PRX?X" || upper == "PRX?Y" || upper == "PRX?Z") {
         // Direct SECUTEST PRX block requests are raw CR-terminated commands.
         // Adding "$xx" makes the device answer with .Nx=x01.
-        out["next_frame"] = command + "\r";
+        out["next_frame"] = command + String("\r");
         out["raw_command"] = true;
     } else {
         out["next_frame"] = build_frame(command);
