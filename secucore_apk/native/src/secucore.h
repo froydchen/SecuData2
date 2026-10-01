@@ -36,6 +36,14 @@ public:
     String get_live_state() const;
     void reset_live_init();
 
+    // v0.5: direct measurement flow.
+    // PRX -> TAS? -> PRX?X -> PRX?Y -> PRX?Z -> parsed measurement.
+    void arm_measurement_monitor();
+    Dictionary begin_measurement_fetch();
+    Dictionary consume_measurement_line(const String &raw);
+    String get_measurement_state() const;
+    void reset_measurement_flow();
+
 private:
     enum class IdentityProbeState {
         IDLE,
@@ -57,6 +65,17 @@ private:
         ERROR,
     };
 
+    enum class MeasurementState {
+        IDLE,
+        ARMED,
+        WAIT_SWITCH,
+        WAIT_PRX_X,
+        WAIT_PRX_Y,
+        WAIT_PRX_Z,
+        RESULT_READY,
+        ERROR,
+    };
+
     IdentityProbeState identity_probe_state = IdentityProbeState::IDLE;
     String identity_probe_error;
 
@@ -65,8 +84,19 @@ private:
     String live_identity;
     String live_mes_status;
 
+    MeasurementState measurement_state = MeasurementState::IDLE;
+    int measurement_switch_position = -1;
+    String measurement_kind;
+    String measurement_prx_x;
+    String measurement_prx_y;
+    String measurement_prx_z;
+    String last_measurement_key;
+
     Dictionary make_live_command(const String &command, const String &message) const;
     Dictionary fail_live(const Dictionary &parsed, const String &message);
+    Dictionary make_measurement_command(const String &command, const String &message) const;
+    Dictionary fail_measurement(const Dictionary &parsed, const String &message);
+    static int parse_switch_position(const String &payload);
     static bool checksum_acceptable(const Dictionary &parsed);
     static bool response_begins_with(const Dictionary &parsed, const String &prefix);
 
