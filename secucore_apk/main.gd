@@ -17,12 +17,12 @@ var fetch_button: Button
 var test_button: Button
 var command_timer: Timer
 
+
 func _ready() -> void:
-    # Diese App ist UI-/Event-getrieben. Kein Grund, im Leerlauf mit voller
-    # Renderfrequenz zu laufen.
     OS.low_processor_usage_mode = true
     OS.low_processor_usage_mode_sleep_usec = 33000
     Engine.max_fps = 30
+
     _build_ui()
     _build_timeout_timer()
     print("GODOT_SCENE_READY")
@@ -34,7 +34,6 @@ func _ready() -> void:
         connect_button.disabled = true
         init_button.disabled = true
         mes_button.disabled = true
-    if fetch_button != null:
         fetch_button.disabled = true
         test_button.disabled = true
         print("SECUCORE_CLASS_MISSING")
@@ -46,13 +45,19 @@ func _ready() -> void:
     detail_label.text = core.get_version() + "\nBasis: SecuData fix117"
 
     var self_test: Dictionary = core.self_test()
-    frame_label.text = "Native Selbstprüfung: " + ("OK" if bool(self_test.get("ok", false)) else "FEHLER") + "\n" + str(self_test.get("detail", ""))
+    frame_label.text = (
+        "Native Selbstprüfung: "
+        + ("OK" if bool(self_test.get("ok", false)) else "FEHLER")
+        + "\n"
+        + str(self_test.get("detail", ""))
+    )
     if bool(self_test.get("ok", false)):
         print("SECUCORE_SMOKE_OK")
     else:
         print("SECUCORE_SMOKE_FAILED: " + str(self_test))
 
     _setup_ble()
+
 
 func _build_timeout_timer() -> void:
     command_timer = Timer.new()
@@ -61,13 +66,13 @@ func _build_timeout_timer() -> void:
     command_timer.timeout.connect(_on_command_timeout)
     add_child(command_timer)
 
+
 func _setup_ble() -> void:
     if not Engine.has_singleton("SecuDataBle"):
         ble_label.text = "BLE-Bridge nur im Android-Build verfügbar."
         connect_button.disabled = true
         init_button.disabled = true
         mes_button.disabled = true
-    if fetch_button != null:
         fetch_button.disabled = true
         return
 
@@ -79,15 +84,15 @@ func _setup_ble() -> void:
     connect_button.disabled = false
     init_button.disabled = true
     mes_button.disabled = true
-    if fetch_button != null:
-        fetch_button.disabled = true
+    fetch_button.disabled = true
 
     if not bool(ble.isBluetoothSupported()):
         ble_label.text = "Bluetooth LE wird auf diesem Gerät nicht unterstützt."
         connect_button.disabled = true
         return
 
-    ble_label.text = "BLE bereit · Berechtigung: " + str(ble.getPermissionState())
+    ble_label.text = "BLE bereit - Berechtigung: " + str(ble.getPermissionState())
+
 
 func _build_ui() -> void:
     var bg := ColorRect.new()
@@ -120,7 +125,7 @@ func _build_ui() -> void:
     root.add_child(subtitle)
 
     status_label = Label.new()
-    status_label.text = "SECUCORE WIRD GELADEN …"
+    status_label.text = "SECUCORE WIRD GELADEN ..."
     status_label.add_theme_font_size_override("font_size", 25)
     root.add_child(status_label)
 
@@ -129,11 +134,10 @@ func _build_ui() -> void:
     detail_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     root.add_child(detail_label)
 
-    var divider := HSeparator.new()
-    root.add_child(divider)
+    root.add_child(HSeparator.new())
 
     ble_label = Label.new()
-    ble_label.text = "BLE wird initialisiert …"
+    ble_label.text = "BLE wird initialisiert ..."
     ble_label.add_theme_font_size_override("font_size", 17)
     ble_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     ble_label.modulate = Color("c8d2dc")
@@ -160,8 +164,6 @@ func _build_ui() -> void:
     mes_button.custom_minimum_size.y = 50
     mes_button.add_theme_font_size_override("font_size", 16)
     mes_button.disabled = true
-    if fetch_button != null:
-        fetch_button.disabled = true
     mes_button.pressed.connect(_refresh_mes_status)
     root.add_child(mes_button)
 
@@ -193,6 +195,7 @@ func _build_ui() -> void:
     frame_label.modulate = Color("7f93a7")
     root.add_child(frame_label)
 
+
 func _connect_ble() -> void:
     if ble == null:
         return
@@ -209,47 +212,46 @@ func _connect_ble() -> void:
     core.reset_measurement_flow()
     init_button.disabled = true
     mes_button.disabled = true
-    if fetch_button != null:
-        fetch_button.disabled = true
-    measurement_label.text = "Suche nach BLE RS232 …"
+    fetch_button.disabled = true
+    measurement_label.text = "Suche nach BLE RS232 ..."
     measurement_label.modulate = Color("c8d2dc")
     ble.startScan("BLE RS232")
 
+
 func _on_ble_state_changed(state: String, detail: String) -> void:
-    ble_label.text = state + (" · " + detail if not detail.is_empty() else "")
+    ble_label.text = state + (" - " + detail if not detail.is_empty() else "")
 
     if state == "READY":
         connect_button.text = "BLE NEU VERBINDEN"
         init_button.disabled = false
         mes_button.disabled = true
-    if fetch_button != null:
         fetch_button.disabled = true
-        # Der echte Nutzungsfall soll nach dem Connect ohne Extra-Tippen bereit sein.
         _start_live_init()
     elif state in ["SCANNING", "CONNECTING", "CONNECTED", "UART_FOUND", "ENABLING_NOTIFY"]:
         init_button.disabled = true
         mes_button.disabled = true
-    if fetch_button != null:
         fetch_button.disabled = true
     elif state == "DISCONNECTED":
         command_timer.stop()
         pending_command = ""
-        core.reset_live_init()
+        if core != null:
+            core.reset_live_init()
+            core.reset_measurement_flow()
         init_button.disabled = true
         mes_button.disabled = true
-    if fetch_button != null:
         fetch_button.disabled = true
+
 
 func _on_ble_error(message: String) -> void:
     command_timer.stop()
     pending_command = ""
-    ble_label.text = "BLE-FEHLER · " + message
+    ble_label.text = "BLE-FEHLER - " + message
     measurement_label.text = message
     measurement_label.modulate = Color("ff7885")
     init_button.disabled = false if ble != null and str(ble.getConnectionState()) == "READY" else true
     mes_button.disabled = true
-    if fetch_button != null:
-        fetch_button.disabled = true
+    fetch_button.disabled = true
+
 
 func _start_live_init() -> void:
     if ble == null or core == null:
@@ -261,30 +263,51 @@ func _start_live_init() -> void:
 
     rx_buffer = ""
     core.reset_live_init()
+    core.reset_measurement_flow()
     init_button.disabled = true
     mes_button.disabled = true
-    if fetch_button != null:
-        fetch_button.disabled = true
+    fetch_button.disabled = true
     var action: Dictionary = core.begin_live_init()
     _send_core_action(action)
+
 
 func _refresh_mes_status() -> void:
     if ble == null or core == null:
         return
+
     var action: Dictionary = core.begin_mes_status_query()
     if not bool(action.get("accepted", false)):
         measurement_label.text = str(action.get("message", "MES? nicht möglich"))
         measurement_label.modulate = Color("ffcc66")
         return
+
     mes_button.disabled = true
-    if fetch_button != null:
-        fetch_button.disabled = true
+    fetch_button.disabled = true
     _send_core_action(action)
+
+
+func _start_measurement_fetch() -> void:
+    if ble == null or core == null:
+        return
+    if str(ble.getConnectionState()) != "READY":
+        measurement_label.text = "BLE ist noch nicht bereit."
+        measurement_label.modulate = Color("ffcc66")
+        return
+
+    var action: Dictionary = core.begin_measurement_fetch()
+    if not bool(action.get("accepted", false)):
+        measurement_label.text = str(action.get("message", "Messdatenabruf nicht möglich"))
+        measurement_label.modulate = Color("ffcc66")
+        return
+
+    fetch_button.disabled = true
+    mes_button.disabled = true
+    _send_core_action(action)
+
 
 func _send_core_action(action: Dictionary) -> void:
     var frame := str(action.get("next_frame", ""))
     var command := str(action.get("next_command", ""))
-
     if frame.is_empty():
         return
 
@@ -306,6 +329,7 @@ func _send_core_action(action: Dictionary) -> void:
 
     command_timer.start()
 
+
 func _on_ble_rx_text(chunk: String) -> void:
     rx_buffer += chunk
 
@@ -317,6 +341,7 @@ func _on_ble_rx_text(chunk: String) -> void:
             continue
         _consume_rx_line(line)
 
+
 func _consume_rx_line(line: String) -> void:
     if core == null:
         return
@@ -326,8 +351,6 @@ func _consume_rx_line(line: String) -> void:
     var upper := payload.to_upper()
     var measurement_state := str(core.get_measurement_state())
 
-    # PRX is asynchronous. It must win over the normal command router so the
-    # measurement is not lost if it arrives while the app is otherwise idle.
     var is_prx_trigger := measurement_state == "ARMED" and upper == "PRX"
     var measurement_command_pending := pending_command in ["TAS?", "PRX?X", "PRX?Y", "PRX?Z"]
 
@@ -335,13 +358,10 @@ func _consume_rx_line(line: String) -> void:
         _consume_measurement_line(line)
         return
 
-    # Connection/status commands continue through the direct live-link state machine.
     if not pending_command.is_empty() or str(core.get_live_state()) != "READY":
         _consume_live_line(line)
         return
 
-    # Unsolicited traffic while armed is handed to the measurement state machine;
-    # non-PRX frames are ignored there without starting work.
     if measurement_state == "ARMED":
         _consume_measurement_line(line)
         return
@@ -399,25 +419,6 @@ func _consume_live_line(line: String) -> void:
         fetch_button.disabled = true
 
 
-func _start_measurement_fetch() -> void:
-    if ble == null or core == null:
-        return
-    if str(ble.getConnectionState()) != "READY":
-        measurement_label.text = "BLE ist noch nicht bereit."
-        measurement_label.modulate = Color("ffcc66")
-        return
-
-    var action: Dictionary = core.begin_measurement_fetch()
-    if not bool(action.get("accepted", false)):
-        measurement_label.text = str(action.get("message", "Messdatenabruf nicht möglich"))
-        measurement_label.modulate = Color("ffcc66")
-        return
-
-    fetch_button.disabled = true
-    mes_button.disabled = true
-    _send_core_action(action)
-
-
 func _consume_measurement_line(line: String) -> void:
     var result: Dictionary = core.consume_measurement_line(line)
     var parsed: Dictionary = result.get("frame", {})
@@ -443,33 +444,35 @@ func _consume_measurement_line(line: String) -> void:
         _send_core_action(result)
         return
 
-    if bool(result.get("complete", false)):
-        if bool(result.get("success", false)):
-            var measurement: Dictionary = result.get("measurement", {})
-            if bool(result.get("duplicate", false)):
-                measurement_label.text = (
-                    "DUPLIKAT VERWORFEN"
-                    + "\nSECUTEST-Zeit: " + str(measurement.get("device_date", ""))
-                    + " " + str(measurement.get("device_time", ""))
-                )
-                measurement_label.modulate = Color("ffcc66")
-            else:
-                _show_real_measurement(measurement)
+    if not bool(result.get("complete", false)):
+        return
 
-            # Nur passiv wieder scharf schalten. Es wird kein Reset und kein
-            # weiterer Gerätebefehl ausgelöst, bis Save/Discard portiert ist.
-            core.arm_measurement_monitor()
-            fetch_button.disabled = false
-            mes_button.disabled = false
-        else:
+    if bool(result.get("success", false)):
+        var measurement: Dictionary = result.get("measurement", {})
+        if bool(result.get("duplicate", false)):
             measurement_label.text = (
-                "MESSDATEN-FEHLER"
-                + "\n" + str(result.get("message", "unbekannt"))
-                + "\nState: " + str(result.get("state", ""))
+                "DUPLIKAT VERWORFEN"
+                + "\nSECUTEST-Zeit: " + str(measurement.get("device_date", ""))
+                + " " + str(measurement.get("device_time", ""))
             )
-            measurement_label.modulate = Color("ff7885")
-            fetch_button.disabled = false
-            mes_button.disabled = false
+            measurement_label.modulate = Color("ffcc66")
+        else:
+            _show_real_measurement(measurement)
+
+        # Passiv wieder lauschen. Kein Reset/Save/Discard wird hier vorweggenommen.
+        core.arm_measurement_monitor()
+        fetch_button.disabled = false
+        mes_button.disabled = false
+        return
+
+    measurement_label.text = (
+        "MESSDATEN-FEHLER"
+        + "\n" + str(result.get("message", "unbekannt"))
+        + "\nState: " + str(result.get("state", ""))
+    )
+    measurement_label.modulate = Color("ff7885")
+    fetch_button.disabled = false
+    mes_button.disabled = false
 
 
 func _show_real_measurement(measurement: Dictionary) -> void:
@@ -500,27 +503,36 @@ func _on_command_timeout() -> void:
         return
 
     if timed_out in ["TAS?", "PRX?X", "PRX?Y", "PRX?Z"]:
-        var state := str(core.get_measurement_state())
-        measurement_label.text = "TIMEOUT bei " + timed_out + "\nMeasurement: " + state + "\nLauschen wird wieder aktiviert."
+        var measurement_state := str(core.get_measurement_state())
+        measurement_label.text = (
+            "TIMEOUT bei " + timed_out
+            + "\nMeasurement: " + measurement_state
+            + "\nLauschen wird wieder aktiviert."
+        )
         measurement_label.modulate = Color("ffcc66")
         core.arm_measurement_monitor()
         fetch_button.disabled = false
         mes_button.disabled = false
         return
 
-    var state := str(core.get_live_state())
-    measurement_label.text = "TIMEOUT bei " + timed_out + "\nCore: " + state + "\nVerbindungstest kann erneut gestartet werden."
+    var live_state := str(core.get_live_state())
+    measurement_label.text = (
+        "TIMEOUT bei " + timed_out
+        + "\nCore: " + live_state
+        + "\nVerbindungstest kann erneut gestartet werden."
+    )
     measurement_label.modulate = Color("ffcc66")
     core.reset_live_init()
+    core.reset_measurement_flow()
     init_button.disabled = false if ble != null and str(ble.getConnectionState()) == "READY" else true
     mes_button.disabled = true
     fetch_button.disabled = true
-    if fetch_button != null:
-        fetch_button.disabled = true
+
 
 func _run_measurement() -> void:
     if core == null:
         return
+
     var result: Dictionary = core.simulate_fix117_measurement()
     if not bool(result.get("valid", false)):
         measurement_label.text = "PARSER-FEHLER\n" + str(result.get("error", "unbekannt"))
@@ -539,6 +551,7 @@ func _run_measurement() -> void:
         + "\nU: " + _fmt(result.get("u")) + " V"
     )
 
+
 func _fmt(value) -> String:
     if value == null:
         return "—"
@@ -547,8 +560,6 @@ func _fmt(value) -> String:
 
 func _notification(what: int) -> void:
     if what == NOTIFICATION_APPLICATION_PAUSED:
-        # Bildschirm aus / App im Hintergrund: keine Scans, keine GATT-Verbindung,
-        # kein laufender Kommando-Timeout. Das verhindert unnötige Hintergrundlast.
         if command_timer != null:
             command_timer.stop()
         pending_command = ""
@@ -560,6 +571,6 @@ func _notification(what: int) -> void:
             ble.disconnect()
     elif what == NOTIFICATION_APPLICATION_RESUMED:
         if ble_label != null:
-            ble_label.text = "App aktiv · BLE bei Bedarf neu verbinden"
+            ble_label.text = "App aktiv - BLE bei Bedarf neu verbinden"
         if measurement_label != null:
             measurement_label.text = "Bereit. Keine Hintergrundkommunikation aktiv."
