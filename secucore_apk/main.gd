@@ -523,13 +523,14 @@ func _show_real_measurement(measurement: Dictionary) -> void:
     lines.append("Drehschalter: " + str(position) + " - " + kind_text)
     lines.append("SECUTEST-Zeit: " + str(measurement.get("device_date", "")) + " " + str(measurement.get("device_time", "")))
 
+    # RPE is only present when the selected test actually contains a
+    # protective-conductor measurement (e.g. SK I). SK II legitimately has no
+    # protective conductor, so an absent RPE field is not an error and is hidden.
     if measurement.get("rpe") != null:
         var rpe_line := "RPE: " + _fmt(measurement.get("rpe")) + " Ω"
         if measurement.get("rpe_limit") != null:
             rpe_line += "   GW " + _fmt(measurement.get("rpe_limit")) + " Ω"
         lines.append(rpe_line)
-    else:
-        lines.append("RPE: nicht gemessen")
 
     if measurement.get("drpe") != null:
         var drpe_line := "ΔRPE: " + _fmt(measurement.get("drpe")) + " Ω"
