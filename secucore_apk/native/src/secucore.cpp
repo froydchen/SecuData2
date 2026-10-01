@@ -35,7 +35,7 @@ void SecuCore::_bind_methods() {
 }
 
 String SecuCore::get_version() const {
-    return "SecuCore C++ v0.5 - Real Measurement";
+    return "SecuCore C++ v0.6 - PRX Flow Fix";
 }
 
 String SecuCore::calculate_checksum_hex(const String &payload_including_dollar) const {
@@ -566,8 +566,9 @@ Dictionary SecuCore::consume_measurement_line(const String &raw) {
             }
 
             measurement_state = MeasurementState::WAIT_PRX_X;
-            out = make_measurement_command("PRX?X", "Drehschalter gelesen - PRX X abrufen");
+            out = make_measurement_command("PRX?X", "Drehschalter gelesen - XON + PRX X abrufen");
             out["frame"] = parsed;
+            out["send_xon"] = true;
             out["switch_position"] = measurement_switch_position;
             out["measurement_kind"] = measurement_kind;
             return out;
@@ -580,8 +581,9 @@ Dictionary SecuCore::consume_measurement_line(const String &raw) {
             }
             measurement_prx_x = payload;
             measurement_state = MeasurementState::WAIT_PRX_Y;
-            out = make_measurement_command("PRX?Y", "PRX X empfangen - PRX Y abrufen");
+            out = make_measurement_command("PRX?Y", "PRX X empfangen - XON + PRX Y abrufen");
             out["frame"] = parsed;
+            out["send_xon"] = true;
             return out;
         }
 
@@ -592,8 +594,9 @@ Dictionary SecuCore::consume_measurement_line(const String &raw) {
             }
             measurement_prx_y = payload;
             measurement_state = MeasurementState::WAIT_PRX_Z;
-            out = make_measurement_command("PRX?Z", "PRX Y empfangen - PRX Z abrufen");
+            out = make_measurement_command("PRX?Z", "PRX Y empfangen - XON + PRX Z abrufen");
             out["frame"] = parsed;
+            out["send_xon"] = true;
             return out;
         }
 
