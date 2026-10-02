@@ -12,7 +12,9 @@ import android.bluetooth.BluetoothStatusCodes
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
+import android.content.ContentValues
 import android.content.pm.PackageManager
+import android.database.sqlite.SQLiteDatabase
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -20,6 +22,8 @@ import org.godotengine.godot.Godot
 import org.godotengine.godot.plugin.GodotPlugin
 import org.godotengine.godot.plugin.SignalInfo
 import org.godotengine.godot.plugin.UsedByGodot
+import org.json.JSONArray
+import org.json.JSONObject
 import java.util.UUID
 
 class SecuDataBlePlugin(godot: Godot) : GodotPlugin(godot) {
@@ -40,6 +44,7 @@ class SecuDataBlePlugin(godot: Godot) : GodotPlugin(godot) {
     private var targetName = "BLE RS232"
     private var connectionState = "IDLE"
     private val handler = Handler(Looper.getMainLooper())
+    private var database: SQLiteDatabase? = null
 
     override fun getPluginName() = BuildConfig.GODOT_PLUGIN_NAME
 
@@ -183,6 +188,249 @@ class SecuDataBlePlugin(godot: Godot) : GodotPlugin(godot) {
             emitError("BLE-Schreiben fehlgeschlagen: ${exc.message}")
             false
         }
+    }
+
+
+    @UsedByGodot
+    fun databaseSaveRecord(recordJson: String): String {
+        val db = ensureDatabase() ?: return jsonError("Datenbank nicht verfügbar")
+        return try {
+            val record = JSONObject(recordJson)
+            val values = ContentValues().apply {
+                put("created_at", record.optString("created_at"))
+                put("measurement_timestamp", record.optString("measurement_timestamp"))
+                put("external_id", record.optString("external_id"))
+                put("geraeteart", record.optString("geraeteart"))
+                put("hersteller", record.optString("hersteller"))
+                put("raum_etage", record.optString("raum_etage"))
+                put("is_ok", if (record.optBoolean("is_ok", true)) 1 else 0)
+                put("switch_position", record.optInt("switch_position", -1))
+                put("measurement_kind", record.optString("measurement_kind"))
+                put("payload_json", record.toString())
+            }
+            val id = db.insertOrThrow("records", null, values)
+            JSONObject()
+                .put("ok", true)
+                .put("id", id)
+                .toString()
+        } catch (exc: Exception) {
+            jsonError("Speichern fehlgeschlagen: ${exc.message}")
+        }
+    }
+
+    @UsedByGodot
+    fun databaseListRecords(limit: Int): String {
+        val db = ensureDatabase() ?: return "[]"
+        val safeLimit = limit.coerceIn(1, 2000)
+        val result = JSONArray()
+        return try {
+            db.query(
+                "records",
+                arrayOf(
+                    "id", "created_at", "measurement_timestamp", "external_id",
+                    "geraeteart", "hersteller", "raum_etage", "is_ok",
+                    "switch_position", "measurement_kind", "payload_json"
+                ),
+                null,
+                null,
+                null,
+                null,
+                "created_at DESC, id DESC",
+                safeLimit.toString(),
+            ).use { cursor ->
+                val idCol = cursor.getColumnIndexOrThrow("id")
+                val payloadCol = cursor.getColumnIndexOrThrow("payload_json")
+                while (cursor.moveToNext()) {
+                    val payloadText = cursor.getString(payloadCol).orEmpty()
+                    val item = try {
+                        JSONObject(payloadText)
+                    } catch (_: Exception) {
+                        JSONObject()
+                    }
+
+                    item.put("database_id", cursor.getLong(idCol))
+                    item.put("created_at", cursor.getString(cursor.getColumnIndexOrThrow("created_at")).orEmpty())
+                    item.put("measurement_timestamp", cursor.getString(cursor.getColumnIndexOrThrow("measurement_timestamp")).orEmpty())
+                    item.put("external_id", cursor.getString(cursor.getColumnIndexOrThrow("external_id")).orEmpty())
+                    item.put("geraeteart", cursor.getString(cursor.getColumnIndexOrThrow("geraeteart")).orEmpty())
+                    item.put("hersteller", cursor.getString(cursor.getColumnIndexOrThrow("hersteller")).orEmpty())
+                    item.put("raum_etage", cursor.getString(cursor.getColumnIndexOrThrow("raum_etage")).orEmpty())
+                    item.put("is_ok", cursor.getInt(cursor.getColumnIndexOrThrow("is_ok")) != 0)
+                    item.put("switch_position", cursor.getInt(cursor.getColumnIndexOrThrow("switch_position")))
+                    item.put("measurement_kind", cursor.getString(cursor.getColumnIndexOrThrow("measurement_kind")).orEmpty())
+                    result.put(item)
+                }
+            }
+            result.toString()
+        } catch (exc: Exception) {
+            emitError("Datenbank lesen fehlgeschlagen: ${exc.message}")
+            "[]"
+        }
+    }
+
+    @UsedByGodot
+    fun databaseDeleteRecord(recordId: Int): Boolean {
+        val db = ensureDatabase() ?: return false
+        return try {
+            db.delete("records", "id = ?", arrayOf(recordId.toString())) > 0
+        } catch (exc: Exception) {
+            emitError("Datensatz löschen fehlgeschlagen: ${exc.message}")
+            false
+        }
+    }
+
+    @UsedByGodot
+    fun databaseUpdateRoom(recordId: Int, room: String): Boolean {
+        val db = ensureDatabase() ?: return false
+        return try {
+            var payload = JSONObject()
+            db.query(
+                "records",
+                arrayOf("payload_json"),
+                "id = ?",
+                arrayOf(recordId.toString()),
+                null,
+                null,
+                null,
+                "1",
+            ).use { cursor ->
+                if (cursor.moveToFirst()) {
+                    payload = try {
+                        JSONObject(cursor.getString(0).orEmpty())
+                    } catch (_: Exception) {
+                        JSONObject()
+                    }
+                } else {
+                    return false
+                }
+            }
+
+            payload.put("raum_etage", room)
+            val values = ContentValues().apply {
+                put("raum_etage", room)
+                put("payload_json", payload.toString())
+            }
+            db.update("records", values, "id = ?", arrayOf(recordId.toString())) > 0
+        } catch (exc: Exception) {
+            emitError("Raum ändern fehlgeschlagen: ${exc.message}")
+            false
+        }
+    }
+
+    @UsedByGodot
+    fun databaseCounts(): String {
+        val db = ensureDatabase() ?: return """{"today":0,"week":0,"total":0}"""
+        return try {
+            fun count(where: String? = null): Int {
+                val sql = if (where.isNullOrBlank()) {
+                    "SELECT COUNT(*) FROM records"
+                } else {
+                    "SELECT COUNT(*) FROM records WHERE $where"
+                }
+                db.rawQuery(sql, null).use { cursor ->
+                    return if (cursor.moveToFirst()) cursor.getInt(0) else 0
+                }
+            }
+
+            val today = count("date(created_at) = date('now','localtime')")
+            val week = count("strftime('%Y-%W', created_at) = strftime('%Y-%W', 'now','localtime')")
+            val total = count()
+
+            JSONObject()
+                .put("today", today)
+                .put("week", week)
+                .put("total", total)
+                .toString()
+        } catch (exc: Exception) {
+            emitError("Zähler lesen fehlgeschlagen: ${exc.message}")
+            """{"today":0,"week":0,"total":0}"""
+        }
+    }
+
+    @UsedByGodot
+    fun databaseGetSetting(key: String, fallback: String): String {
+        val db = ensureDatabase() ?: return fallback
+        return try {
+            db.query(
+                "settings",
+                arrayOf("value"),
+                "key = ?",
+                arrayOf(key),
+                null,
+                null,
+                null,
+                "1",
+            ).use { cursor ->
+                if (cursor.moveToFirst()) cursor.getString(0).orEmpty() else fallback
+            }
+        } catch (_: Exception) {
+            fallback
+        }
+    }
+
+    @UsedByGodot
+    fun databaseSetSetting(key: String, value: String): Boolean {
+        val db = ensureDatabase() ?: return false
+        return try {
+            val values = ContentValues().apply {
+                put("key", key)
+                put("value", value)
+            }
+            db.insertWithOnConflict("settings", null, values, SQLiteDatabase.CONFLICT_REPLACE) != -1L
+        } catch (exc: Exception) {
+            emitError("Einstellung speichern fehlgeschlagen: ${exc.message}")
+            false
+        }
+    }
+
+    private fun ensureDatabase(): SQLiteDatabase? {
+        database?.let { if (it.isOpen) return it }
+
+        val host = activity ?: return null
+        return try {
+            val path = host.getDatabasePath("secudata.db")
+            path.parentFile?.mkdirs()
+            val db = SQLiteDatabase.openOrCreateDatabase(path, null)
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS records (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at TEXT NOT NULL,
+                    measurement_timestamp TEXT NOT NULL DEFAULT '',
+                    external_id TEXT NOT NULL DEFAULT '',
+                    geraeteart TEXT NOT NULL DEFAULT '',
+                    hersteller TEXT NOT NULL DEFAULT '',
+                    raum_etage TEXT NOT NULL DEFAULT '',
+                    is_ok INTEGER NOT NULL DEFAULT 1,
+                    switch_position INTEGER NOT NULL DEFAULT -1,
+                    measurement_kind TEXT NOT NULL DEFAULT '',
+                    payload_json TEXT NOT NULL DEFAULT '{}'
+                )
+                """.trimIndent()
+            )
+            db.execSQL(
+                """
+                CREATE TABLE IF NOT EXISTS settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """.trimIndent()
+            )
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_records_created_at ON records(created_at DESC)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_records_room ON records(raum_etage, created_at DESC)")
+            database = db
+            db
+        } catch (exc: Exception) {
+            emitError("Datenbank öffnen fehlgeschlagen: ${exc.message}")
+            null
+        }
+    }
+
+    private fun jsonError(message: String): String {
+        return JSONObject()
+            .put("ok", false)
+            .put("error", message)
+            .toString()
     }
 
     private val scanTimeout = Runnable {
