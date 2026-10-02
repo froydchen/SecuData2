@@ -1,8 +1,8 @@
 extends Control
 
-const FIELD_IDS := ["id", "geraeteart", "hersteller"]
-const FIELD_NAMES := ["ID", "GERÄTEART", "HERSTELLER"]
-const FIELD_COLORS := [
+const FIELD_IDS: Array[String] = ["id", "geraeteart", "hersteller"]
+const FIELD_NAMES: Array[String] = ["ID", "GERÄTEART", "HERSTELLER"]
+const FIELD_COLORS: Array[Color] = [
     Color("55d6a7"),
     Color("f0b84b"),
     Color("a98be8"),
@@ -561,7 +561,7 @@ func _on_common_input_submitted(_value: String) -> void:
 
 func _refresh_capture_rows_only() -> void:
     for i in FIELD_IDS.size():
-        var id := FIELD_IDS[i]
+        var id: String = FIELD_IDS[i]
         var value := str(field_values.get(id, "")).strip_edges()
         field_buttons[i].text = FIELD_NAMES[i] + "\n" + (value if not value.is_empty() else "—")
 
@@ -570,11 +570,11 @@ func _refresh_capture_ui() -> void:
     _refresh_capture_rows_only()
 
     for i in FIELD_IDS.size():
-        var color := FIELD_COLORS[i]
-        var active := i == active_field_index and not capture_locked
-        var bg := Color("101b28") if not active else color.darkened(0.72)
-        var border := color.darkened(0.42) if not active else color
-        var width := 1 if not active else 3
+        var color: Color = FIELD_COLORS[i]
+        var active: bool = i == active_field_index and not capture_locked
+        var bg: Color = Color("101b28") if not active else color.darkened(0.72)
+        var border: Color = color.darkened(0.42) if not active else color
+        var width: int = 1 if not active else 3
 
         field_buttons[i].disabled = capture_locked
         field_buttons[i].add_theme_color_override("font_color", color if not capture_locked else Color("526274"))
@@ -587,7 +587,7 @@ func _refresh_capture_ui() -> void:
     common_input.editable = not capture_locked
     common_input.mouse_filter = Control.MOUSE_FILTER_STOP if not capture_locked else Control.MOUSE_FILTER_IGNORE
 
-    var active_color := FIELD_COLORS[active_field_index]
+    var active_color: Color = FIELD_COLORS[active_field_index]
     common_input.placeholder_text = "Warte auf Messdaten" if capture_locked else FIELD_NAMES[active_field_index]
     if capture_locked:
         common_input.text = ""
