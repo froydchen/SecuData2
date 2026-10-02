@@ -192,6 +192,23 @@ class SecuDataBlePlugin(godot: Godot) : GodotPlugin(godot) {
 
 
     @UsedByGodot
+    fun databaseSelfTest(): String {
+        val db = ensureDatabase() ?: return jsonError("Datenbank konnte nicht geöffnet werden")
+        return try {
+            db.rawQuery("SELECT COUNT(*) FROM records", null).use { cursor ->
+                val count = if (cursor.moveToFirst()) cursor.getInt(0) else 0
+                JSONObject()
+                    .put("ok", true)
+                    .put("records", count)
+                    .put("path", activity?.getDatabasePath("secudata.db")?.absolutePath.orEmpty())
+                    .toString()
+            }
+        } catch (exc: Exception) {
+            jsonError("Datenbank-Selbsttest fehlgeschlagen: ${exc.message}")
+        }
+    }
+
+    @UsedByGodot
     fun databaseSaveRecord(recordJson: String): String {
         val db = ensureDatabase() ?: return jsonError("Datenbank nicht verfügbar")
         return try {
