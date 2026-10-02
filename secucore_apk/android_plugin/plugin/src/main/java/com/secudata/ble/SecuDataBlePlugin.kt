@@ -334,6 +334,59 @@ class SecuDataBlePlugin(godot: Godot) : GodotPlugin(godot) {
         }
     }
 
+
+    @UsedByGodot
+    fun databaseUpdateRecord(
+        recordId: Int,
+        externalId: String,
+        geraeteart: String,
+        hersteller: String,
+        room: String,
+    ): Boolean {
+        val db = ensureDatabase() ?: return false
+        return try {
+            var payload = JSONObject()
+            db.query(
+                "records",
+                arrayOf("payload_json"),
+                "id = ?",
+                arrayOf(recordId.toString()),
+                null,
+                null,
+                null,
+                "1",
+            ).use { cursor ->
+                if (cursor.moveToFirst()) {
+                    payload = try {
+                        JSONObject(cursor.getString(0).orEmpty())
+                    } catch (_: Exception) {
+                        JSONObject()
+                    }
+                } else {
+                    return false
+                }
+            }
+
+            payload.put("external_id", externalId)
+            payload.put("id", externalId)
+            payload.put("geraeteart", geraeteart)
+            payload.put("hersteller", hersteller)
+            payload.put("raum_etage", room)
+
+            val values = ContentValues().apply {
+                put("external_id", externalId)
+                put("geraeteart", geraeteart)
+                put("hersteller", hersteller)
+                put("raum_etage", room)
+                put("payload_json", payload.toString())
+            }
+            db.update("records", values, "id = ?", arrayOf(recordId.toString())) > 0
+        } catch (exc: Exception) {
+            emitError("Datensatz ändern fehlgeschlagen: ${exc.message}")
+            false
+        }
+    }
+
     @UsedByGodot
     fun databaseCounts(): String {
         val db = ensureDatabase() ?: return """{"today":0,"week":0,"total":0}"""
