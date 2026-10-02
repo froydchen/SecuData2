@@ -266,6 +266,378 @@ func _build_ui() -> void:
     _build_data_overlay()
 
 
+func _build_room_dialog() -> void:
+    room_dialog = AcceptDialog.new()
+    room_dialog.title = "Raum"
+    room_dialog.min_size = Vector2i(430, 220)
+    room_dialog.confirmed.connect(_save_room_from_dialog)
+    add_child(room_dialog)
+
+    var margin := MarginContainer.new()
+    margin.add_theme_constant_override("margin_left", 18)
+    margin.add_theme_constant_override("margin_right", 18)
+    margin.add_theme_constant_override("margin_top", 14)
+    margin.add_theme_constant_override("margin_bottom", 14)
+    room_dialog.add_child(margin)
+
+    var box := VBoxContainer.new()
+    box.add_theme_constant_override("separation", 12)
+    margin.add_child(box)
+
+    var label := Label.new()
+    label.text = "Raum / Bereich"
+    label.add_theme_font_size_override("font_size", 20)
+    box.add_child(label)
+
+    room_input = LineEdit.new()
+    room_input.custom_minimum_size.y = 66
+    room_input.add_theme_font_size_override("font_size", 24)
+    room_input.placeholder_text = "z. B. 204"
+    box.add_child(room_input)
+
+
+func _open_room_dialog() -> void:
+    if room_dialog == null:
+        return
+    room_input.text = current_room
+    room_dialog.popup_centered()
+    room_input.grab_focus()
+    room_input.caret_column = room_input.text.length()
+
+
+func _save_room_from_dialog() -> void:
+    current_room = room_input.text.strip_edges()
+    _refresh_room_label()
+    if ble != null and ble.has_method("databaseSetSetting"):
+        ble.databaseSetSetting("current_room", current_room)
+
+
+func _build_delete_dialog() -> void:
+    delete_dialog = ConfirmationDialog.new()
+    delete_dialog.title = "Datensatz löschen"
+    delete_dialog.dialog_text = "Diesen Datensatz wirklich löschen?"
+    delete_dialog.confirmed.connect(_delete_pending_record)
+    add_child(delete_dialog)
+
+
+func _build_data_overlay() -> void:
+    data_overlay = PanelContainer.new()
+    data_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+    data_overlay.visible = false
+    data_overlay.z_index = 100
+    data_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+    data_overlay.add_theme_stylebox_override("panel", _box(Color("07111c"), Color("07111c"), 0, 0))
+    add_child(data_overlay)
+
+    var outer := MarginContainer.new()
+    outer.add_theme_constant_override("margin_left", 14)
+    outer.add_theme_constant_override("margin_right", 14)
+    outer.add_theme_constant_override("margin_top", 18)
+    outer.add_theme_constant_override("margin_bottom", 12)
+    data_overlay.add_child(outer)
+
+    var root := VBoxContainer.new()
+    root.add_theme_constant_override("separation", 10)
+    outer.add_child(root)
+
+    var header := HBoxContainer.new()
+    header.custom_minimum_size.y = 58
+    header.add_theme_constant_override("separation", 10)
+    root.add_child(header)
+
+    var back := Button.new()
+    back.text = "‹"
+    back.custom_minimum_size = Vector2(58, 52)
+    back.add_theme_font_size_override("font_size", 32)
+    back.add_theme_stylebox_override("normal", _box(Color("111c28"), Color("26394c"), 1, 14))
+    back.pressed.connect(_close_data_view)
+    header.add_child(back)
+
+    var title := Label.new()
+    title.text = "DATEN"
+    title.add_theme_font_size_override("font_size", 30)
+    title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    header.add_child(title)
+
+    data_counts_label = Label.new()
+    data_counts_label.text = "Heute 0 · Woche 0 · Gesamt 0"
+    data_counts_label.add_theme_font_size_override("font_size", 15)
+    data_counts_label.add_theme_color_override("font_color", Color("b9c3ce"))
+    data_counts_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+    data_counts_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    header.add_child(data_counts_label)
+
+    var rule := HSeparator.new()
+    root.add_child(rule)
+
+    var scroll := ScrollContainer.new()
+    scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+    root.add_child(scroll)
+
+    data_list = VBoxContainer.new()
+    data_list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    data_list.add_theme_constant_override("separation", 9)
+    scroll.add_child(data_list)
+
+
+func _open_data_view() -> void:
+    if data_overlay == null:
+        return
+    common_input.release_focus()
+    DisplayServer.virtual_keyboard_hide()
+    _refresh_data_view()
+    data_overlay.visible = true
+
+
+func _close_data_view() -> void:
+    if data_overlay != null:
+        data_overlay.visible = false
+
+
+func _refresh_data_view() -> void:
+    if data_list == null:
+        return
+
+    for child in data_list.get_children():
+        data_list.remove_child(child)
+        child.queue_free()
+
+    _refresh_database_counts()
+
+    if ble == null or not ble.has_method("databaseListRecords"):
+        var unavailable := Label.new()
+        unavailable.text = "Datenbank ist auf diesem Build nicht verfügbar."
+        unavailable.add_theme_font_size_override("font_size", 20)
+        data_list.add_child(unavailable)
+        return
+
+    var parsed = JSON.parse_string(str(ble.databaseListRecords(600)))
+    if not (parsed is Array):
+        return
+
+    var records: Array = parsed
+    if records.is_empty():
+        var empty := Label.new()
+        empty.text = "Noch keine gespeicherten Messungen."
+        empty.add_theme_font_size_override("font_size", 21)
+        empty.add_theme_color_override("font_color", Color("7f91a3"))
+        empty.custom_minimum_size.y = 100
+        empty.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+        empty.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+        data_list.add_child(empty)
+        return
+
+    var last_group := ""
+    for item in records:
+        if not (item is Dictionary):
+            continue
+        var record: Dictionary = item
+        var date_text := _record_date(record)
+        var room_text := str(record.get("raum_etage", "")).strip_edges()
+        var group_key := date_text + "|" + room_text
+
+        if group_key != last_group:
+            _add_data_group_header(date_text, room_text)
+            last_group = group_key
+
+        _add_data_record_card(record)
+
+
+func _add_data_group_header(date_text: String, room_text: String) -> void:
+    var header := PanelContainer.new()
+    header.add_theme_stylebox_override("panel", _box(Color("101b27"), Color("25384c"), 1, 12))
+    data_list.add_child(header)
+
+    var row := HBoxContainer.new()
+    row.custom_minimum_size.y = 48
+    row.add_theme_constant_override("separation", 10)
+    header.add_child(row)
+
+    var date_label := Label.new()
+    date_label.text = date_text if not date_text.is_empty() else "Ohne Datum"
+    date_label.add_theme_font_size_override("font_size", 19)
+    date_label.add_theme_color_override("font_color", Color("e4e9ef"))
+    date_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    date_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    row.add_child(date_label)
+
+    var room := Label.new()
+    room.text = "Raum " + (room_text if not room_text.is_empty() else "—")
+    room.add_theme_font_size_override("font_size", 18)
+    room.add_theme_color_override("font_color", Color("a98be8"))
+    room.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    row.add_child(room)
+
+
+func _add_data_record_card(record: Dictionary) -> void:
+    var ok := bool(record.get("is_ok", true))
+    var border_color: Color = Color("89c96e") if ok else Color("b63b3b")
+
+    var card := PanelContainer.new()
+    card.add_theme_stylebox_override("panel", _box(Color("0d1824"), border_color, 2, 13))
+    data_list.add_child(card)
+
+    var margin := MarginContainer.new()
+    margin.add_theme_constant_override("margin_left", 12)
+    margin.add_theme_constant_override("margin_right", 10)
+    margin.add_theme_constant_override("margin_top", 10)
+    margin.add_theme_constant_override("margin_bottom", 10)
+    card.add_child(margin)
+
+    var box := VBoxContainer.new()
+    box.add_theme_constant_override("separation", 8)
+    margin.add_child(box)
+
+    var top := HBoxContainer.new()
+    top.add_theme_constant_override("separation", 8)
+    box.add_child(top)
+
+    var number := Label.new()
+    number.text = "#" + str(record.get("database_id", "?"))
+    number.add_theme_font_size_override("font_size", 18)
+    number.add_theme_color_override("font_color", Color("9aa9b8"))
+    top.add_child(number)
+
+    var time_label := Label.new()
+    time_label.text = _record_time(record)
+    time_label.add_theme_font_size_override("font_size", 18)
+    time_label.add_theme_color_override("font_color", Color("d8e0e8"))
+    top.add_child(time_label)
+
+    var middle := Label.new()
+    middle.text = _record_middle_text(record)
+    middle.add_theme_font_size_override("font_size", 20)
+    middle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    middle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    middle.text_overrun_behavior = TextServer.OVERRUN_TRIM_WORD_ELLIPSIS
+    top.add_child(middle)
+
+    var result := Label.new()
+    result.text = "OK" if ok else "NICHT OK"
+    result.add_theme_font_size_override("font_size", 18)
+    result.add_theme_color_override("font_color", border_color)
+    top.add_child(result)
+
+    var meta := HBoxContainer.new()
+    meta.add_theme_constant_override("separation", 8)
+    box.add_child(meta)
+
+    var ident := Label.new()
+    ident.text = str(record.get("external_id", "")).strip_edges()
+    if ident.text.is_empty():
+        ident.text = "ID —"
+    ident.add_theme_font_size_override("font_size", 18)
+    ident.add_theme_color_override("font_color", Color("55d6a7"))
+    ident.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    meta.add_child(ident)
+
+    var manufacturer := Label.new()
+    manufacturer.text = str(record.get("hersteller", "")).strip_edges()
+    if manufacturer.text.is_empty():
+        manufacturer.text = "Hersteller —"
+    manufacturer.add_theme_font_size_override("font_size", 18)
+    manufacturer.add_theme_color_override("font_color", Color("a98be8"))
+    manufacturer.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+    manufacturer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    meta.add_child(manufacturer)
+
+    var action_row := HBoxContainer.new()
+    action_row.add_theme_constant_override("separation", 8)
+    box.add_child(action_row)
+
+    var details_button := Button.new()
+    details_button.text = "Daten"
+    details_button.custom_minimum_size.y = 44
+    details_button.add_theme_font_size_override("font_size", 16)
+    details_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    action_row.add_child(details_button)
+
+    var delete_button := Button.new()
+    delete_button.text = "×"
+    delete_button.custom_minimum_size = Vector2(54, 44)
+    delete_button.add_theme_font_size_override("font_size", 24)
+    delete_button.add_theme_color_override("font_color", Color("ff7885"))
+    delete_button.pressed.connect(_ask_delete_record.bind(int(record.get("database_id", -1))))
+    action_row.add_child(delete_button)
+
+    var details_box := VBoxContainer.new()
+    details_box.visible = false
+    details_box.add_theme_constant_override("separation", 4)
+    box.add_child(details_box)
+
+    var values := Label.new()
+    values.text = _record_measurement_text(record)
+    values.add_theme_font_size_override("font_size", 18)
+    values.add_theme_color_override("font_color", Color("c8d1da"))
+    values.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+    details_box.add_child(values)
+
+    var stamp := Label.new()
+    stamp.text = "Messzeit: " + str(record.get("measurement_timestamp", "—"))
+    stamp.add_theme_font_size_override("font_size", 15)
+    stamp.add_theme_color_override("font_color", Color("75879a"))
+    details_box.add_child(stamp)
+
+    details_button.pressed.connect(_toggle_record_details.bind(details_box, details_button))
+
+
+func _toggle_record_details(details_box: VBoxContainer, button: Button) -> void:
+    details_box.visible = not details_box.visible
+    button.text = "Daten ▲" if details_box.visible else "Daten"
+
+
+func _ask_delete_record(record_id: int) -> void:
+    if record_id < 0 or delete_dialog == null:
+        return
+    pending_delete_record_id = record_id
+    delete_dialog.popup_centered()
+
+
+func _delete_pending_record() -> void:
+    if pending_delete_record_id < 0:
+        return
+    if ble != null and ble.has_method("databaseDeleteRecord"):
+        ble.databaseDeleteRecord(pending_delete_record_id)
+    pending_delete_record_id = -1
+    _refresh_data_view()
+
+
+func _record_date(record: Dictionary) -> String:
+    var created := str(record.get("created_at", ""))
+    return created.substr(0, 10) if created.length() >= 10 else created
+
+
+func _record_time(record: Dictionary) -> String:
+    var created := str(record.get("created_at", ""))
+    if created.length() >= 16:
+        return created.substr(11, 5)
+    return ""
+
+
+func _record_middle_text(record: Dictionary) -> String:
+    var kind := str(record.get("measurement_kind", ""))
+    var kind_text := "Gerät" if kind == "GERAET" else ("Leitung" if kind == "LEITUNG" else "Messung")
+    var device := str(record.get("geraeteart", "")).strip_edges()
+    return kind_text if device.is_empty() else kind_text + " · " + device
+
+
+func _record_measurement_text(record: Dictionary) -> String:
+    var parts: Array[String] = []
+    if record.get("rpe") != null:
+        parts.append("RPE  " + _fmt(record.get("rpe")) + " Ω")
+    if record.get("rins") != null:
+        parts.append("RISO  " + _fmt(record.get("rins")) + " MΩ")
+    if record.get("uiso") != null:
+        parts.append("UISO  " + _fmt(record.get("uiso")) + " V")
+    if record.get("ipe") != null:
+        parts.append("IPE  " + _fmt(record.get("ipe")) + " mA")
+    if record.get("u") != null:
+        parts.append("U  " + _fmt(record.get("u")) + " V")
+    return "\n".join(parts) if not parts.is_empty() else "Keine Messwerte"
+
+
 func _box(bg: Color, border: Color, width: int = 1, radius: int = 12) -> StyleBoxFlat:
     var style := StyleBoxFlat.new()
     style.bg_color = bg
