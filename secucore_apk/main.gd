@@ -2,10 +2,17 @@ extends Control
 
 const FIELD_IDS: Array[String] = ["id", "geraeteart", "hersteller"]
 const FIELD_NAMES: Array[String] = ["ID", "GERÄTEART", "HERSTELLER"]
+const ID_COLOR := Color("28b9e6")
+const DEVICE_COLOR := Color("d5aa3f")
+const MANUFACTURER_COLOR := Color("9b70cf")
+const OK_COLOR := Color("79c94b")
+const NOK_COLOR := Color("e05252")
+const NEUTRAL_BORDER := Color("314152")
+
 const FIELD_COLORS: Array[Color] = [
-    Color("55d6a7"),
-    Color("f0b84b"),
-    Color("a98be8"),
+    ID_COLOR,
+    DEVICE_COLOR,
+    MANUFACTURER_COLOR,
 ]
 
 var core
@@ -39,6 +46,7 @@ var connection_button: Button
 var room_label: Button
 var today_label: Button
 var measurement_card: PanelContainer
+var measurement_header: PanelContainer
 var measurement_title: Label
 var measurement_values: Label
 var workflow_label: Label
@@ -56,6 +64,12 @@ var room_dialog: AcceptDialog
 var room_input: LineEdit
 var delete_dialog: ConfirmationDialog
 var pending_delete_record_id := -1
+var edit_dialog: AcceptDialog
+var edit_id_input: LineEdit
+var edit_device_input: LineEdit
+var edit_manufacturer_input: LineEdit
+var edit_room_input: LineEdit
+var editing_record_id := -1
 
 
 func _ready() -> void:
@@ -142,7 +156,7 @@ func _build_ui() -> void:
     today_label.add_theme_color_override("font_color", Color("e0e4e8"))
     today_label.custom_minimum_size = Vector2(92, 46)
     today_label.add_theme_stylebox_override("normal", _box(Color("0b1520"), Color("1f2d3b"), 1, 12))
-    today_label.add_theme_stylebox_override("pressed", _box(Color("17212c"), Color("89c96e"), 2, 12))
+    today_label.add_theme_stylebox_override("pressed", _box(Color("17212c"), OK_COLOR, 2, 12))
     today_label.pressed.connect(_open_data_view)
     topbar.add_child(today_label)
 
@@ -153,31 +167,47 @@ func _build_ui() -> void:
     connection_button.add_theme_color_override("font_color", Color("8fa0b4"))
     connection_button.add_theme_stylebox_override("normal", _box(Color("0c1724"), Color("26384c"), 1, 13))
     connection_button.add_theme_stylebox_override("hover", _box(Color("111f2e"), Color("3b526a"), 1, 13))
-    connection_button.add_theme_stylebox_override("pressed", _box(Color("142437"), Color("55d6a7"), 2, 13))
+    connection_button.add_theme_stylebox_override("pressed", _box(Color("142437"), OK_COLOR, 2, 13))
     connection_button.pressed.connect(_connect_ble)
     topbar.add_child(connection_button)
 
     # --- Measurement instrument card ---------------------------------------
+    # Neutral body; only the result topbar carries the OK/NOK accent.
     measurement_card = PanelContainer.new()
-    measurement_card.add_theme_stylebox_override("panel", _box(Color("0b1724"), Color("203248"), 1, 16))
+    measurement_card.add_theme_stylebox_override("panel", _box(Color("0b1724"), NEUTRAL_BORDER, 1, 16))
     root.add_child(measurement_card)
 
-    var measurement_margin := MarginContainer.new()
-    measurement_margin.add_theme_constant_override("margin_left", 14)
-    measurement_margin.add_theme_constant_override("margin_right", 14)
-    measurement_margin.add_theme_constant_override("margin_top", 13)
-    measurement_margin.add_theme_constant_override("margin_bottom", 13)
-    measurement_card.add_child(measurement_margin)
+    var measurement_shell := VBoxContainer.new()
+    measurement_shell.add_theme_constant_override("separation", 0)
+    measurement_card.add_child(measurement_shell)
 
-    var measurement_box := VBoxContainer.new()
-    measurement_box.add_theme_constant_override("separation", 4)
-    measurement_margin.add_child(measurement_box)
+    measurement_header = PanelContainer.new()
+    measurement_header.add_theme_stylebox_override("panel", _result_header_box(Color("111d29"), NEUTRAL_BORDER, 1))
+    measurement_shell.add_child(measurement_header)
+
+    var header_margin := MarginContainer.new()
+    header_margin.add_theme_constant_override("margin_left", 14)
+    header_margin.add_theme_constant_override("margin_right", 14)
+    header_margin.add_theme_constant_override("margin_top", 9)
+    header_margin.add_theme_constant_override("margin_bottom", 8)
+    measurement_header.add_child(header_margin)
 
     measurement_title = Label.new()
     measurement_title.text = "BEREIT"
     measurement_title.add_theme_font_size_override("font_size", 21)
     measurement_title.add_theme_color_override("font_color", Color("9fb1c4"))
-    measurement_box.add_child(measurement_title)
+    header_margin.add_child(measurement_title)
+
+    var measurement_margin := MarginContainer.new()
+    measurement_margin.add_theme_constant_override("margin_left", 14)
+    measurement_margin.add_theme_constant_override("margin_right", 14)
+    measurement_margin.add_theme_constant_override("margin_top", 11)
+    measurement_margin.add_theme_constant_override("margin_bottom", 12)
+    measurement_shell.add_child(measurement_margin)
+
+    var measurement_box := VBoxContainer.new()
+    measurement_box.add_theme_constant_override("separation", 5)
+    measurement_margin.add_child(measurement_box)
 
     measurement_values = Label.new()
     measurement_values.text = "Wartet auf SECUTEST"
@@ -225,14 +255,14 @@ func _build_ui() -> void:
     gesture_button.add_theme_color_override("font_color", Color("d8e2ec"))
     gesture_button.add_theme_stylebox_override("normal", _box(Color("101d2b"), Color("31475e"), 1, 16))
     gesture_button.add_theme_stylebox_override("hover", _box(Color("132334"), Color("3e5871"), 1, 16))
-    gesture_button.add_theme_stylebox_override("pressed", _box(Color("16283a"), Color("55d6a7"), 2, 16))
+    gesture_button.add_theme_stylebox_override("pressed", _box(Color("16283a"), OK_COLOR, 2, 16))
     gesture_button.gui_input.connect(_on_gesture_input)
     capture_row.add_child(gesture_button)
 
     # --- One shared input, exactly below the three fields -------------------
     common_input = LineEdit.new()
-    common_input.custom_minimum_size.y = 76
-    common_input.add_theme_font_size_override("font_size", 26)
+    common_input.custom_minimum_size.y = 96
+    common_input.add_theme_font_size_override("font_size", 34)
     common_input.add_theme_color_override("font_color", Color("111820"))
     common_input.add_theme_color_override("font_placeholder_color", Color("6f7b87"))
     common_input.clear_button_enabled = true
@@ -265,6 +295,7 @@ func _build_ui() -> void:
     _refresh_gesture_visual()
     _build_room_dialog()
     _build_delete_dialog()
+    _build_edit_dialog()
     _build_data_overlay()
 
 
@@ -475,7 +506,7 @@ func _add_data_group_header(date_text: String, room_text: String) -> void:
 
 func _add_data_record_card(record: Dictionary) -> void:
     var ok := bool(record.get("is_ok", true))
-    var border_color: Color = Color("89c96e") if ok else Color("b63b3b")
+    var border_color: Color = OK_COLOR if ok else NOK_COLOR
 
     var card := PanelContainer.new()
     card.add_theme_stylebox_override("panel", _box(Color("0d1824"), border_color, 2, 13))
@@ -531,7 +562,7 @@ func _add_data_record_card(record: Dictionary) -> void:
     if ident.text.is_empty():
         ident.text = "ID —"
     ident.add_theme_font_size_override("font_size", 18)
-    ident.add_theme_color_override("font_color", Color("55d6a7"))
+    ident.add_theme_color_override("font_color", OK_COLOR)
     ident.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     meta.add_child(ident)
 
@@ -708,7 +739,7 @@ func _connect_ble() -> void:
 func _on_ble_state_changed(state: String, detail: String) -> void:
     match state:
         "READY":
-            _set_connection_visual("BLE", Color("55d6a7"))
+            _set_connection_visual("BLE", OK_COLOR)
             _set_workflow("SECUTEST wird geprüft ...", Color("8fa0b4"))
             _start_live_init()
         "SCANNING":
@@ -777,7 +808,7 @@ func _send_enter() -> void:
         _connect_ble()
         return
     if bool(ble.sendText(core.build_frame("TAS!4"))):
-        _set_workflow("ENTER an SECUTEST gesendet.", Color("55d6a7"))
+        _set_workflow("ENTER an SECUTEST gesendet.", OK_COLOR)
     else:
         _set_workflow("ENTER konnte nicht gesendet werden.", Color("ff7885"))
 
@@ -836,9 +867,9 @@ func _consume_live_line(line: String) -> void:
 
     if bool(result.get("complete", false)) and bool(result.get("success", false)):
         core.arm_measurement_monitor()
-        _set_connection_visual("BLE", Color("55d6a7"))
+        _set_connection_visual("BLE", OK_COLOR)
         _show_waiting_state()
-        _set_workflow("Verbunden · wartet auf PRX", Color("55d6a7"))
+        _set_workflow("Verbunden · wartet auf PRX", OK_COLOR)
         return
 
     if bool(result.get("complete", false)):
@@ -900,10 +931,10 @@ func _show_real_measurement(measurement: Dictionary) -> void:
     var kind_text := "GERÄT" if kind == "GERAET" else ("LEITUNG" if kind == "LEITUNG" else "MESSUNG")
 
     measurement_title.text = kind_text + " · " + ("OK" if ok else "NICHT OK")
-    measurement_title.add_theme_color_override("font_color", Color("55d6a7") if ok else Color("ff7885"))
+    measurement_title.add_theme_color_override("font_color", OK_COLOR if ok else Color("ff7885"))
     measurement_card.add_theme_stylebox_override(
         "panel",
-        _box(Color("0b1724"), Color("55d6a7") if ok else Color("ff7885"), 2, 16)
+        _box(Color("0b1724"), OK_COLOR if ok else Color("ff7885"), 2, 16)
     )
 
     var parts: Array[String] = []
@@ -1026,8 +1057,8 @@ func _refresh_gesture_visual(direction: int = 0, progress: float = 0.0) -> void:
         gesture_button.add_theme_stylebox_override("normal", _box(Color("27151c"), Color("ff7885"), 3, 16))
     elif direction > 0:
         gesture_button.text = "↓\nSPEICHERN\n" + str(int(progress * 100.0)) + "%"
-        gesture_button.add_theme_color_override("font_color", Color("55d6a7"))
-        gesture_button.add_theme_stylebox_override("normal", _box(Color("10231f"), Color("55d6a7"), 3, 16))
+        gesture_button.add_theme_color_override("font_color", OK_COLOR)
+        gesture_button.add_theme_stylebox_override("normal", _box(Color("10231f"), OK_COLOR, 3, 16))
     else:
         gesture_button.text = "→\nWEITER\n\n↑ Verwerfen\n↓ Speichern"
         gesture_button.add_theme_color_override("font_color", Color("dce6ef"))
@@ -1172,7 +1203,7 @@ func _begin_post_measurement_action(mode: String) -> void:
 
     post_action_mode = mode
     _set_capture_locked(true)
-    _set_workflow(mode + " · SECUTEST wird vorbereitet ...", Color("55d6a7") if mode == "GESPEICHERT" else Color("f0b84b"))
+    _set_workflow(mode + " · SECUTEST wird vorbereitet ...", OK_COLOR if mode == "GESPEICHERT" else Color("f0b84b"))
 
     var switch_position := int(current_measurement.get("switch_position", -1))
     core.reset_post_measurement()
@@ -1201,7 +1232,7 @@ func _consume_post_measurement_line(line: String) -> void:
         core.reset_post_measurement()
         core.arm_measurement_monitor()
         _show_waiting_state()
-        _set_workflow(completed_mode + " · bereit für nächste Messung", Color("55d6a7"))
+        _set_workflow(completed_mode + " · bereit für nächste Messung", OK_COLOR)
         return
 
     if bool(result.get("complete", false)):
