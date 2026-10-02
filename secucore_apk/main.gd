@@ -738,8 +738,7 @@ func _save_current_measurement() -> void:
         _set_workflow("Speichern fehlgeschlagen.", Color("ff7885"))
         return
 
-    today_count += 1
-    _refresh_today_label()
+    _refresh_database_counts()
     _begin_post_measurement_action("GESPEICHERT")
 
 
@@ -750,29 +749,32 @@ func _discard_current_measurement() -> void:
 
 
 func _persist_measurement(measurement: Dictionary) -> bool:
-    var path := "user://secudata_measurements.jsonl"
-    var file: FileAccess
-
-    if FileAccess.file_exists(path):
-        file = FileAccess.open(path, FileAccess.READ_WRITE)
-        if file != null:
-            file.seek_end()
-    else:
-        file = FileAccess.open(path, FileAccess.WRITE)
-
-    if file == null:
+    if ble == null or not ble.has_method("databaseSaveRecord"):
         return false
 
     var record := measurement.duplicate(true)
-    record["id"] = str(field_values["id"])
+    var created_at := Time.get_datetime_string_from_system()
+    var measurement_timestamp := str(measurement.get("device_date", ""))
+    if not str(measurement.get("device_time", "")).is_empty():
+        measurement_timestamp += " " + str(measurement.get("device_time", ""))
+
+    record["created_at"] = created_at
+    record["measurement_timestamp"] = measurement_timestamp
+    record["external_id"] = str(field_values["id"])
     record["geraeteart"] = str(field_values["geraeteart"])
     record["hersteller"] = str(field_values["hersteller"])
-    record["saved_at"] = Time.get_datetime_string_from_system()
-    record["source"] = "SecuCore Android v0.9"
-    file.store_line(JSON.stringify(record))
-    file.flush()
-    file.close()
-    return true
+    record["raum_etage"] = current_room
+    record["source"] = "SecuCore Android v0.10"
+
+    var response_text := str(ble.databaseSaveRecord(JSON.stringify(record)))
+    var response = JSON.parse_string(response_text)
+    if response is Dictionary and bool(response.get("ok", false)):
+        current_measurement["database_id"] = int(response.get("id", -1))
+        return true
+
+    if response is Dictionary:
+        _set_workflow(str(response.get("error", "Datenbankfehler")), Color("ff7885"))
+    return false
 
 
 func _begin_post_measurement_action(mode: String) -> void:
@@ -863,33 +865,70 @@ func _fmt(value) -> String:
     return str(value)
 
 
-func _load_today_count() -> void:
-    today_count = 0
+func _setup_database_state() -> void:
+    if ble == null or not ble.has_method("databaseCounts"):
+        _refresh_today_label()
+        return
+
+    current_room = str(ble.databaseGetSetting("current_room", ""))
+    _refresh_room_label()
+    _migrate_legacy_jsonl_once()
+    _refresh_database_counts()
+
+
+func _migrate_legacy_jsonl_once() -> void:
+    if ble == null or not ble.has_method("databaseGetSetting"):
+        return
+    if str(ble.databaseGetSetting("legacy_jsonl_migrated", "0")) == "1":
+        return
+
     var path := "user://secudata_measurements.jsonl"
-    if not FileAccess.file_exists(path):
-        _refresh_today_label()
-        return
+    if FileAccess.file_exists(path):
+        var file := FileAccess.open(path, FileAccess.READ)
+        if file != null:
+            while not file.eof_reached():
+                var line := file.get_line().strip_edges()
+                if line.is_empty():
+                    continue
+                var parsed = JSON.parse_string(line)
+                if not (parsed is Dictionary):
+                    continue
+                var record: Dictionary = parsed.duplicate(true)
+                record["created_at"] = str(record.get("saved_at", Time.get_datetime_string_from_system()))
+                record["measurement_timestamp"] = str(record.get("device_date", "")) + " " + str(record.get("device_time", ""))
+                record["external_id"] = str(record.get("id", ""))
+                record["raum_etage"] = str(record.get("raum_etage", ""))
+                ble.databaseSaveRecord(JSON.stringify(record))
+            file.close()
 
-    var file := FileAccess.open(path, FileAccess.READ)
-    if file == null:
-        _refresh_today_label()
-        return
+    ble.databaseSetSetting("legacy_jsonl_migrated", "1")
 
-    var today := Time.get_date_string_from_system()
-    while not file.eof_reached():
-        var line := file.get_line().strip_edges()
-        if line.is_empty():
-            continue
-        var parsed = JSON.parse_string(line)
-        if parsed is Dictionary and str(parsed.get("saved_at", "")).begins_with(today):
-            today_count += 1
-    file.close()
+
+func _refresh_database_counts() -> void:
+    today_count = 0
+    week_count = 0
+    total_count = 0
+
+    if ble != null and ble.has_method("databaseCounts"):
+        var parsed = JSON.parse_string(str(ble.databaseCounts()))
+        if parsed is Dictionary:
+            today_count = int(parsed.get("today", 0))
+            week_count = int(parsed.get("week", 0))
+            total_count = int(parsed.get("total", 0))
+
     _refresh_today_label()
+    if data_counts_label != null:
+        data_counts_label.text = "Heute %d  ·  Woche %d  ·  Gesamt %d" % [today_count, week_count, total_count]
 
 
 func _refresh_today_label() -> void:
     if today_label != null:
         today_label.text = "Heute " + str(today_count)
+
+
+func _refresh_room_label() -> void:
+    if room_label != null:
+        room_label.text = "Raum " + (current_room if not current_room.is_empty() else "—")
 
 
 func _notification(what: int) -> void:
