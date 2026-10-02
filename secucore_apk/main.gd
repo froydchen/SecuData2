@@ -63,9 +63,11 @@ func _ready() -> void:
     core = ClassDB.instantiate("SecuCore")
     var self_test: Dictionary = core.self_test()
     if not bool(self_test.get("ok", false)):
+        print("SECUCORE_SMOKE_FAILED: " + str(self_test))
         _set_workflow("Core-Selbsttest fehlgeschlagen: " + str(self_test.get("detail", "")), Color("ff7885"))
         return
 
+    print("SECUCORE_SMOKE_OK")
     _setup_ble()
     _set_capture_locked(true)
     _show_waiting_state()
