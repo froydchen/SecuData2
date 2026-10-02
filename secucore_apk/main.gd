@@ -506,98 +506,147 @@ func _add_data_group_header(date_text: String, room_text: String) -> void:
 
 func _add_data_record_card(record: Dictionary) -> void:
     var ok := bool(record.get("is_ok", true))
-    var border_color: Color = OK_COLOR if ok else NOK_COLOR
+    var result_color: Color = OK_COLOR if ok else NOK_COLOR
 
+    # Neutral card body. The result colour lives only in the topbar so OK/NOK
+    # stays obvious without turning the entire dataset into a green/red frame.
     var card := PanelContainer.new()
-    card.add_theme_stylebox_override("panel", _box(Color("0d1824"), border_color, 2, 13))
+    card.add_theme_stylebox_override("panel", _box(Color("0d1824"), NEUTRAL_BORDER, 1, 14))
     data_list.add_child(card)
 
-    var margin := MarginContainer.new()
-    margin.add_theme_constant_override("margin_left", 12)
-    margin.add_theme_constant_override("margin_right", 10)
-    margin.add_theme_constant_override("margin_top", 10)
-    margin.add_theme_constant_override("margin_bottom", 10)
-    card.add_child(margin)
+    var shell := VBoxContainer.new()
+    shell.add_theme_constant_override("separation", 0)
+    card.add_child(shell)
 
-    var box := VBoxContainer.new()
-    box.add_theme_constant_override("separation", 8)
-    margin.add_child(box)
+    var topbar := PanelContainer.new()
+    topbar.add_theme_stylebox_override("panel", _result_header_box(Color("111d29"), result_color, 2))
+    shell.add_child(topbar)
+
+    var top_margin := MarginContainer.new()
+    top_margin.add_theme_constant_override("margin_left", 12)
+    top_margin.add_theme_constant_override("margin_right", 12)
+    top_margin.add_theme_constant_override("margin_top", 8)
+    top_margin.add_theme_constant_override("margin_bottom", 8)
+    topbar.add_child(top_margin)
 
     var top := HBoxContainer.new()
-    top.add_theme_constant_override("separation", 8)
-    box.add_child(top)
+    top.custom_minimum_size.y = 42
+    top.add_theme_constant_override("separation", 9)
+    top_margin.add_child(top)
 
-    var number := Label.new()
-    number.text = "#" + str(record.get("database_id", "?"))
-    number.add_theme_font_size_override("font_size", 18)
-    number.add_theme_color_override("font_color", Color("9aa9b8"))
-    top.add_child(number)
+    var number_time := Label.new()
+    number_time.text = "#" + str(int(record.get("database_id", -1))) + "  " + _record_time(record)
+    number_time.add_theme_font_size_override("font_size", 18)
+    number_time.add_theme_color_override("font_color", Color("b7c1cc"))
+    number_time.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    top.add_child(number_time)
 
-    var time_label := Label.new()
-    time_label.text = _record_time(record)
-    time_label.add_theme_font_size_override("font_size", 18)
-    time_label.add_theme_color_override("font_color", Color("d8e0e8"))
-    top.add_child(time_label)
+    var mode_holder := CenterContainer.new()
+    mode_holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    top.add_child(mode_holder)
 
-    var middle := Label.new()
-    middle.text = _record_middle_text(record)
-    middle.add_theme_font_size_override("font_size", 20)
-    middle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-    middle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    middle.text_overrun_behavior = TextServer.OVERRUN_TRIM_WORD_ELLIPSIS
-    top.add_child(middle)
+    var mode := Label.new()
+    mode.text = _measurement_mode_text(record)
+    mode.custom_minimum_size.x = 250
+    mode.add_theme_font_size_override("font_size", 19)
+    mode.add_theme_color_override("font_color", Color("eef2f6"))
+    mode.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+    mode.text_overrun_behavior = TextServer.OVERRUN_TRIM_WORD_ELLIPSIS
+    mode_holder.add_child(mode)
 
     var result := Label.new()
     result.text = "OK" if ok else "NICHT OK"
     result.add_theme_font_size_override("font_size", 18)
-    result.add_theme_color_override("font_color", border_color)
+    result.add_theme_color_override("font_color", result_color)
+    result.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     top.add_child(result)
 
-    var meta := HBoxContainer.new()
-    meta.add_theme_constant_override("separation", 8)
-    box.add_child(meta)
+    var body_margin := MarginContainer.new()
+    body_margin.add_theme_constant_override("margin_left", 12)
+    body_margin.add_theme_constant_override("margin_right", 10)
+    body_margin.add_theme_constant_override("margin_top", 10)
+    body_margin.add_theme_constant_override("margin_bottom", 9)
+    shell.add_child(body_margin)
 
-    var ident := Label.new()
-    ident.text = str(record.get("external_id", "")).strip_edges()
-    if ident.text.is_empty():
-        ident.text = "ID —"
-    ident.add_theme_font_size_override("font_size", 18)
-    ident.add_theme_color_override("font_color", OK_COLOR)
-    ident.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    meta.add_child(ident)
+    var box := VBoxContainer.new()
+    box.add_theme_constant_override("separation", 9)
+    body_margin.add_child(box)
+
+    # Middle row: device type + manufacturer on the left, ID on the right.
+    var middle := HBoxContainer.new()
+    middle.custom_minimum_size.y = 64
+    middle.add_theme_constant_override("separation", 12)
+    box.add_child(middle)
+
+    var left_meta := VBoxContainer.new()
+    left_meta.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    left_meta.add_theme_constant_override("separation", 3)
+    middle.add_child(left_meta)
+
+    var device := Label.new()
+    device.text = str(record.get("geraeteart", "")).strip_edges()
+    if device.text.is_empty():
+        device.text = "Geräteart —"
+    device.add_theme_font_size_override("font_size", 20)
+    device.add_theme_color_override("font_color", DEVICE_COLOR)
+    device.text_overrun_behavior = TextServer.OVERRUN_TRIM_WORD_ELLIPSIS
+    left_meta.add_child(device)
 
     var manufacturer := Label.new()
     manufacturer.text = str(record.get("hersteller", "")).strip_edges()
     if manufacturer.text.is_empty():
         manufacturer.text = "Hersteller —"
-    manufacturer.add_theme_font_size_override("font_size", 18)
-    manufacturer.add_theme_color_override("font_color", Color("a98be8"))
-    manufacturer.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-    manufacturer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    meta.add_child(manufacturer)
+    manufacturer.add_theme_font_size_override("font_size", 19)
+    manufacturer.add_theme_color_override("font_color", MANUFACTURER_COLOR)
+    manufacturer.text_overrun_behavior = TextServer.OVERRUN_TRIM_WORD_ELLIPSIS
+    left_meta.add_child(manufacturer)
 
+    var ident := Label.new()
+    ident.text = str(record.get("external_id", "")).strip_edges()
+    if ident.text.is_empty():
+        ident.text = "ID —"
+    ident.custom_minimum_size.x = 190
+    ident.add_theme_font_size_override("font_size", 22)
+    ident.add_theme_color_override("font_color", ID_COLOR)
+    ident.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+    ident.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+    ident.text_overrun_behavior = TextServer.OVERRUN_TRIM_WORD_ELLIPSIS
+    middle.add_child(ident)
+
+    # Bottom action row follows the familiar Termux data card.
     var action_row := HBoxContainer.new()
-    action_row.add_theme_constant_override("separation", 8)
+    action_row.add_theme_constant_override("separation", 7)
     box.add_child(action_row)
 
     var details_button := Button.new()
-    details_button.text = "Daten"
-    details_button.custom_minimum_size.y = 44
-    details_button.add_theme_font_size_override("font_size", 16)
+    details_button.text = "Daten ▼"
+    details_button.custom_minimum_size.y = 50
+    details_button.add_theme_font_size_override("font_size", 18)
     details_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    details_button.add_theme_stylebox_override("normal", _box(Color("101b27"), Color("243546"), 1, 10))
     action_row.add_child(details_button)
+
+    var edit_button := Button.new()
+    edit_button.text = "✎"
+    edit_button.custom_minimum_size = Vector2(58, 50)
+    edit_button.add_theme_font_size_override("font_size", 24)
+    edit_button.add_theme_color_override("font_color", Color("e6edf4"))
+    edit_button.add_theme_stylebox_override("normal", _box(Color("101b27"), Color("243546"), 1, 10))
+    edit_button.pressed.connect(_open_edit_record.bind(record))
+    action_row.add_child(edit_button)
 
     var delete_button := Button.new()
     delete_button.text = "×"
-    delete_button.custom_minimum_size = Vector2(54, 44)
-    delete_button.add_theme_font_size_override("font_size", 24)
-    delete_button.add_theme_color_override("font_color", Color("ff7885"))
+    delete_button.custom_minimum_size = Vector2(58, 50)
+    delete_button.add_theme_font_size_override("font_size", 26)
+    delete_button.add_theme_color_override("font_color", NOK_COLOR)
+    delete_button.add_theme_stylebox_override("normal", _box(Color("101b27"), Color("243546"), 1, 10))
     delete_button.pressed.connect(_ask_delete_record.bind(int(record.get("database_id", -1))))
     action_row.add_child(delete_button)
 
     var details_box := VBoxContainer.new()
     details_box.visible = false
-    details_box.add_theme_constant_override("separation", 4)
+    details_box.add_theme_constant_override("separation", 5)
     box.add_child(details_box)
 
     var values := Label.new()
@@ -618,7 +667,7 @@ func _add_data_record_card(record: Dictionary) -> void:
 
 func _toggle_record_details(details_box: VBoxContainer, button: Button) -> void:
     details_box.visible = not details_box.visible
-    button.text = "Daten ▲" if details_box.visible else "Daten"
+    button.text = "Daten ▲" if details_box.visible else "Daten ▼"
 
 
 func _ask_delete_record(record_id: int) -> void:
