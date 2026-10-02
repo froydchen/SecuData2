@@ -32,6 +32,8 @@ var today_count := 0
 var week_count := 0
 var total_count := 0
 var current_room := ""
+var database_ready := false
+var last_database_error := ""
 
 var connection_button: Button
 var room_label: Button
@@ -308,7 +310,7 @@ func _open_room_dialog() -> void:
 func _save_room_from_dialog() -> void:
     current_room = room_input.text.strip_edges()
     _refresh_room_label()
-    if ble != null and ble.has_method("databaseSetSetting"):
+    if ble != null and database_ready:
         ble.databaseSetSetting("current_room", current_room)
 
 
@@ -406,7 +408,7 @@ func _refresh_data_view() -> void:
 
     _refresh_database_counts()
 
-    if ble == null or not ble.has_method("databaseListRecords"):
+    if ble == null or not database_ready:
         var unavailable := Label.new()
         unavailable.text = "Datenbank ist auf diesem Build nicht verfügbar."
         unavailable.add_theme_font_size_override("font_size", 20)
@@ -598,7 +600,7 @@ func _ask_delete_record(record_id: int) -> void:
 func _delete_pending_record() -> void:
     if pending_delete_record_id < 0:
         return
-    if ble != null and ble.has_method("databaseDeleteRecord"):
+    if ble != null and database_ready:
         ble.databaseDeleteRecord(pending_delete_record_id)
     pending_delete_record_id = -1
     _refresh_data_view()
@@ -1107,7 +1109,8 @@ func _save_current_measurement() -> void:
         return
 
     if not _persist_measurement(current_measurement):
-        _set_workflow("Speichern fehlgeschlagen.", Color("ff7885"))
+        var message := last_database_error if not last_database_error.is_empty() else "Speichern fehlgeschlagen."
+        _set_workflow(message, Color("ff7885"))
         return
 
     _refresh_database_counts()
@@ -1121,8 +1124,18 @@ func _discard_current_measurement() -> void:
 
 
 func _persist_measurement(measurement: Dictionary) -> bool:
-    if ble == null or not ble.has_method("databaseSaveRecord"):
+    last_database_error = ""
+
+    if ble == null:
+        last_database_error = "Speichern fehlgeschlagen: Android-Bridge fehlt."
         return false
+
+    if not database_ready:
+        _setup_database_state()
+        if not database_ready:
+            if last_database_error.is_empty():
+                last_database_error = "Speichern fehlgeschlagen: Datenbank nicht bereit."
+            return false
 
     var record := measurement.duplicate(true)
     var created_at := Time.get_datetime_string_from_system()
@@ -1138,6 +1151,8 @@ func _persist_measurement(measurement: Dictionary) -> bool:
     record["raum_etage"] = current_room
     record["source"] = "SecuCore Android v0.10"
 
+    # Direct call on purpose: @UsedByGodot plugin methods are bridged methods and
+    # must not be rejected merely because Object.has_method() does not list them.
     var response_text := str(ble.databaseSaveRecord(JSON.stringify(record)))
     var response = JSON.parse_string(response_text)
     if response is Dictionary and bool(response.get("ok", false)):
@@ -1145,7 +1160,9 @@ func _persist_measurement(measurement: Dictionary) -> bool:
         return true
 
     if response is Dictionary:
-        _set_workflow(str(response.get("error", "Datenbankfehler")), Color("ff7885"))
+        last_database_error = str(response.get("error", "Datenbankfehler"))
+    else:
+        last_database_error = "Speichern fehlgeschlagen: ungültige Datenbankantwort."
     return false
 
 
@@ -1238,10 +1255,25 @@ func _fmt(value) -> String:
 
 
 func _setup_database_state() -> void:
-    if ble == null or not ble.has_method("databaseCounts"):
+    database_ready = false
+    last_database_error = ""
+
+    if ble == null:
+        last_database_error = "Datenbank nicht verfügbar: Android-Bridge fehlt."
         _refresh_today_label()
         return
 
+    var self_test_text := str(ble.databaseSelfTest())
+    var self_test = JSON.parse_string(self_test_text)
+    if not (self_test is Dictionary) or not bool(self_test.get("ok", false)):
+        if self_test is Dictionary:
+            last_database_error = str(self_test.get("error", "Datenbank-Selbsttest fehlgeschlagen."))
+        else:
+            last_database_error = "Datenbank-Selbsttest lieferte keine gültige Antwort."
+        _refresh_today_label()
+        return
+
+    database_ready = true
     current_room = str(ble.databaseGetSetting("current_room", ""))
     _refresh_room_label()
     _migrate_legacy_jsonl_once()
@@ -1249,7 +1281,7 @@ func _setup_database_state() -> void:
 
 
 func _migrate_legacy_jsonl_once() -> void:
-    if ble == null or not ble.has_method("databaseGetSetting"):
+    if ble == null:
         return
     if str(ble.databaseGetSetting("legacy_jsonl_migrated", "0")) == "1":
         return
@@ -1281,7 +1313,7 @@ func _refresh_database_counts() -> void:
     week_count = 0
     total_count = 0
 
-    if ble != null and ble.has_method("databaseCounts"):
+    if ble != null and database_ready:
         var parsed = JSON.parse_string(str(ble.databaseCounts()))
         if parsed is Dictionary:
             today_count = int(parsed.get("today", 0))
