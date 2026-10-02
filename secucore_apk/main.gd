@@ -29,10 +29,13 @@ var gesture_last_position := Vector2.ZERO
 var gesture_press_ms := 0
 
 var today_count := 0
+var week_count := 0
+var total_count := 0
+var current_room := ""
 
 var connection_button: Button
-var room_label: Label
-var today_label: Label
+var room_label: Button
+var today_label: Button
 var measurement_card: PanelContainer
 var measurement_title: Label
 var measurement_values: Label
@@ -44,6 +47,14 @@ var suggestion_panel: PanelContainer
 var suggestion_hint: Label
 var command_timer: Timer
 
+var data_overlay: PanelContainer
+var data_list: VBoxContainer
+var data_counts_label: Label
+var room_dialog: AcceptDialog
+var room_input: LineEdit
+var delete_dialog: ConfirmationDialog
+var pending_delete_record_id := -1
+
 
 func _ready() -> void:
     OS.low_processor_usage_mode = true
@@ -52,8 +63,6 @@ func _ready() -> void:
 
     _build_ui()
     _build_timeout_timer()
-    _load_today_count()
-
     if not ClassDB.class_exists("SecuCore"):
         _set_connection_visual("CORE FEHLT", Color("ff7885"))
         _set_workflow("Native C++-Erweiterung konnte nicht geladen werden.", Color("ff7885"))
@@ -69,6 +78,7 @@ func _ready() -> void:
 
     print("SECUCORE_SMOKE_OK")
     _setup_ble()
+    _setup_database_state()
     _set_capture_locked(true)
     _show_waiting_state()
 
@@ -102,37 +112,42 @@ func _build_ui() -> void:
 
     # --- Compact status bar -------------------------------------------------
     var topbar := HBoxContainer.new()
-    topbar.custom_minimum_size.y = 48
+    topbar.custom_minimum_size.y = 58
     topbar.add_theme_constant_override("separation", 10)
     root.add_child(topbar)
 
     var brand := Label.new()
     brand.text = "SECU-DAT"
-    brand.add_theme_font_size_override("font_size", 25)
+    brand.add_theme_font_size_override("font_size", 30)
     brand.add_theme_color_override("font_color", Color("f2f5f8"))
     brand.size_flags_vertical = Control.SIZE_SHRINK_CENTER
     topbar.add_child(brand)
 
-    room_label = Label.new()
+    room_label = Button.new()
     room_label.text = "Raum —"
-    room_label.add_theme_font_size_override("font_size", 16)
-    room_label.add_theme_color_override("font_color", Color("93a4b8"))
-    room_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+    room_label.add_theme_font_size_override("font_size", 18)
+    room_label.add_theme_color_override("font_color", Color("d2d9e0"))
     room_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    room_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    room_label.custom_minimum_size.y = 46
+    room_label.add_theme_stylebox_override("normal", _box(Color("0b1520"), Color("1f2d3b"), 1, 12))
+    room_label.add_theme_stylebox_override("pressed", _box(Color("17212c"), Color("8252b1"), 2, 12))
+    room_label.pressed.connect(_open_room_dialog)
     topbar.add_child(room_label)
 
-    today_label = Label.new()
+    today_label = Button.new()
     today_label.text = "Heute 0"
-    today_label.add_theme_font_size_override("font_size", 14)
-    today_label.add_theme_color_override("font_color", Color("b8c5d3"))
-    today_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+    today_label.add_theme_font_size_override("font_size", 16)
+    today_label.add_theme_color_override("font_color", Color("e0e4e8"))
+    today_label.custom_minimum_size = Vector2(92, 46)
+    today_label.add_theme_stylebox_override("normal", _box(Color("0b1520"), Color("1f2d3b"), 1, 12))
+    today_label.add_theme_stylebox_override("pressed", _box(Color("17212c"), Color("89c96e"), 2, 12))
+    today_label.pressed.connect(_open_data_view)
     topbar.add_child(today_label)
 
     connection_button = Button.new()
     connection_button.text = "● BLE"
-    connection_button.custom_minimum_size = Vector2(92, 42)
-    connection_button.add_theme_font_size_override("font_size", 14)
+    connection_button.custom_minimum_size = Vector2(96, 46)
+    connection_button.add_theme_font_size_override("font_size", 16)
     connection_button.add_theme_color_override("font_color", Color("8fa0b4"))
     connection_button.add_theme_stylebox_override("normal", _box(Color("0c1724"), Color("26384c"), 1, 13))
     connection_button.add_theme_stylebox_override("hover", _box(Color("111f2e"), Color("3b526a"), 1, 13))
@@ -148,8 +163,8 @@ func _build_ui() -> void:
     var measurement_margin := MarginContainer.new()
     measurement_margin.add_theme_constant_override("margin_left", 14)
     measurement_margin.add_theme_constant_override("margin_right", 14)
-    measurement_margin.add_theme_constant_override("margin_top", 10)
-    measurement_margin.add_theme_constant_override("margin_bottom", 10)
+    measurement_margin.add_theme_constant_override("margin_top", 13)
+    measurement_margin.add_theme_constant_override("margin_bottom", 13)
     measurement_card.add_child(measurement_margin)
 
     var measurement_box := VBoxContainer.new()
@@ -158,41 +173,41 @@ func _build_ui() -> void:
 
     measurement_title = Label.new()
     measurement_title.text = "BEREIT"
-    measurement_title.add_theme_font_size_override("font_size", 17)
+    measurement_title.add_theme_font_size_override("font_size", 21)
     measurement_title.add_theme_color_override("font_color", Color("9fb1c4"))
     measurement_box.add_child(measurement_title)
 
     measurement_values = Label.new()
     measurement_values.text = "Wartet auf SECUTEST"
-    measurement_values.add_theme_font_size_override("font_size", 19)
+    measurement_values.add_theme_font_size_override("font_size", 25)
     measurement_values.add_theme_color_override("font_color", Color("e8eef5"))
     measurement_values.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     measurement_box.add_child(measurement_values)
 
     workflow_label = Label.new()
     workflow_label.text = "Nicht verbunden"
-    workflow_label.add_theme_font_size_override("font_size", 12)
+    workflow_label.add_theme_font_size_override("font_size", 15)
     workflow_label.add_theme_color_override("font_color", Color("64788e"))
     workflow_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
     measurement_box.add_child(workflow_label)
 
     # --- Fixed thumb-capture geometry: 2/3 fields + 1/3 gesture pad --------
     var capture_row := HBoxContainer.new()
-    capture_row.custom_minimum_size.y = 192
+    capture_row.custom_minimum_size.y = 240
     capture_row.add_theme_constant_override("separation", 9)
     root.add_child(capture_row)
 
     var field_stack := VBoxContainer.new()
     field_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     field_stack.size_flags_stretch_ratio = 2.0
-    field_stack.add_theme_constant_override("separation", 6)
+    field_stack.add_theme_constant_override("separation", 8)
     capture_row.add_child(field_stack)
 
     for i in FIELD_IDS.size():
         var button := Button.new()
-        button.custom_minimum_size.y = 60
+        button.custom_minimum_size.y = 74
         button.size_flags_vertical = Control.SIZE_EXPAND_FILL
-        button.add_theme_font_size_override("font_size", 17)
+        button.add_theme_font_size_override("font_size", 22)
         button.alignment = HORIZONTAL_ALIGNMENT_LEFT
         button.focus_mode = Control.FOCUS_NONE
         button.pressed.connect(_on_field_pressed.bind(i))
@@ -202,9 +217,9 @@ func _build_ui() -> void:
     gesture_button = Button.new()
     gesture_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     gesture_button.size_flags_stretch_ratio = 1.0
-    gesture_button.custom_minimum_size = Vector2(130, 192)
+    gesture_button.custom_minimum_size = Vector2(138, 240)
     gesture_button.focus_mode = Control.FOCUS_NONE
-    gesture_button.add_theme_font_size_override("font_size", 18)
+    gesture_button.add_theme_font_size_override("font_size", 21)
     gesture_button.add_theme_color_override("font_color", Color("d8e2ec"))
     gesture_button.add_theme_stylebox_override("normal", _box(Color("101d2b"), Color("31475e"), 1, 16))
     gesture_button.add_theme_stylebox_override("hover", _box(Color("132334"), Color("3e5871"), 1, 16))
@@ -214,8 +229,8 @@ func _build_ui() -> void:
 
     # --- One shared input, exactly below the three fields -------------------
     common_input = LineEdit.new()
-    common_input.custom_minimum_size.y = 58
-    common_input.add_theme_font_size_override("font_size", 21)
+    common_input.custom_minimum_size.y = 76
+    common_input.add_theme_font_size_override("font_size", 26)
     common_input.add_theme_color_override("font_color", Color("111820"))
     common_input.add_theme_color_override("font_placeholder_color", Color("6f7b87"))
     common_input.clear_button_enabled = true
@@ -225,8 +240,8 @@ func _build_ui() -> void:
 
     # --- Reserved future suggestion space: always between input and keyboard -
     suggestion_panel = PanelContainer.new()
-    suggestion_panel.custom_minimum_size.y = 92
-    suggestion_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+    suggestion_panel.custom_minimum_size.y = 124
+    suggestion_panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
     suggestion_panel.add_theme_stylebox_override("panel", _box(Color("09131e"), Color("18283a"), 1, 14))
     root.add_child(suggestion_panel)
 
@@ -238,14 +253,17 @@ func _build_ui() -> void:
     suggestion_panel.add_child(suggestion_margin)
 
     suggestion_hint = Label.new()
-    suggestion_hint.text = "WORTVORSCHLÄGE"
-    suggestion_hint.add_theme_font_size_override("font_size", 11)
+    suggestion_hint.text = "WORTVORSCHLÄGE · 2 REIHEN RESERVIERT"
+    suggestion_hint.add_theme_font_size_override("font_size", 14)
     suggestion_hint.add_theme_color_override("font_color", Color("34485e"))
     suggestion_hint.vertical_alignment = VERTICAL_ALIGNMENT_TOP
     suggestion_margin.add_child(suggestion_hint)
 
     _refresh_capture_ui()
     _refresh_gesture_visual()
+    _build_room_dialog()
+    _build_delete_dialog()
+    _build_data_overlay()
 
 
 func _box(bg: Color, border: Color, width: int = 1, radius: int = 12) -> StyleBoxFlat:
