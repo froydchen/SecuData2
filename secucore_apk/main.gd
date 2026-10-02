@@ -917,25 +917,23 @@ func _consume_measurement_line(line: String) -> void:
 
 func _show_waiting_state() -> void:
     measurement_title.text = "BEREIT"
-    measurement_title.add_theme_color_override("font_color", Color("8fa0b4"))
+    measurement_title.add_theme_color_override("font_color", Color("9aaabd"))
     measurement_values.text = "Wartet auf Messung"
     measurement_values.add_theme_color_override("font_color", Color("e8eef5"))
-    measurement_card.add_theme_stylebox_override("panel", _box(Color("0b1724"), Color("203248"), 1, 16))
+    measurement_card.add_theme_stylebox_override("panel", _box(Color("0b1724"), NEUTRAL_BORDER, 1, 16))
+    measurement_header.add_theme_stylebox_override("panel", _result_header_box(Color("111d29"), NEUTRAL_BORDER, 1))
     _refresh_gesture_visual()
 
 
 func _show_real_measurement(measurement: Dictionary) -> void:
     var ok := bool(measurement.get("is_ok", false))
     var position := int(measurement.get("switch_position", -1))
-    var kind := str(measurement.get("measurement_kind", ""))
-    var kind_text := "GERÄT" if kind == "GERAET" else ("LEITUNG" if kind == "LEITUNG" else "MESSUNG")
+    var result_color: Color = OK_COLOR if ok else NOK_COLOR
 
-    measurement_title.text = kind_text + " · " + ("OK" if ok else "NICHT OK")
-    measurement_title.add_theme_color_override("font_color", OK_COLOR if ok else Color("ff7885"))
-    measurement_card.add_theme_stylebox_override(
-        "panel",
-        _box(Color("0b1724"), OK_COLOR if ok else Color("ff7885"), 2, 16)
-    )
+    measurement_title.text = _measurement_mode_text(measurement) + "    " + ("OK" if ok else "NICHT OK")
+    measurement_title.add_theme_color_override("font_color", result_color)
+    measurement_card.add_theme_stylebox_override("panel", _box(Color("0b1724"), NEUTRAL_BORDER, 1, 16))
+    measurement_header.add_theme_stylebox_override("panel", _result_header_box(Color("111d29"), result_color, 2))
 
     var parts: Array[String] = []
     if measurement.get("rpe") != null:
@@ -948,7 +946,7 @@ func _show_real_measurement(measurement: Dictionary) -> void:
         parts.append("U " + _fmt(measurement.get("u")) + " V")
 
     measurement_values.text = "  ·  ".join(parts)
-    measurement_values.add_theme_color_override("font_color", Color("e8eef5"))
+    measurement_values.add_theme_color_override("font_color", Color("eef2f6"))
     _set_workflow("Drehschalter " + str(position) + " · Angaben ergänzen", Color("8fa0b4"))
     _refresh_gesture_visual()
 
