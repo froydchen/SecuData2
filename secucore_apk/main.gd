@@ -353,6 +353,90 @@ func _build_delete_dialog() -> void:
     add_child(delete_dialog)
 
 
+func _build_edit_dialog() -> void:
+    edit_dialog = AcceptDialog.new()
+    edit_dialog.title = "Datensatz bearbeiten"
+    edit_dialog.min_size = Vector2i(540, 560)
+    edit_dialog.confirmed.connect(_save_edited_record)
+    add_child(edit_dialog)
+
+    var margin := MarginContainer.new()
+    margin.add_theme_constant_override("margin_left", 18)
+    margin.add_theme_constant_override("margin_right", 18)
+    margin.add_theme_constant_override("margin_top", 14)
+    margin.add_theme_constant_override("margin_bottom", 14)
+    edit_dialog.add_child(margin)
+
+    var box := VBoxContainer.new()
+    box.add_theme_constant_override("separation", 10)
+    margin.add_child(box)
+
+    var title := Label.new()
+    title.text = "Gespeicherte Angaben"
+    title.add_theme_font_size_override("font_size", 24)
+    box.add_child(title)
+
+    edit_id_input = _add_edit_field(box, "ID", ID_COLOR)
+    edit_device_input = _add_edit_field(box, "Geräteart", DEVICE_COLOR)
+    edit_manufacturer_input = _add_edit_field(box, "Hersteller", MANUFACTURER_COLOR)
+    edit_room_input = _add_edit_field(box, "Raum", Color("c9d2dc"))
+
+
+func _add_edit_field(parent: VBoxContainer, label_text: String, accent: Color) -> LineEdit:
+    var label := Label.new()
+    label.text = label_text
+    label.add_theme_font_size_override("font_size", 17)
+    label.add_theme_color_override("font_color", accent)
+    parent.add_child(label)
+
+    var input := LineEdit.new()
+    input.custom_minimum_size.y = 64
+    input.add_theme_font_size_override("font_size", 23)
+    input.add_theme_stylebox_override("normal", _box(Color("eef2f5"), accent, 2, 12))
+    input.add_theme_stylebox_override("focus", _box(Color("ffffff"), accent, 3, 12))
+    input.add_theme_color_override("font_color", Color("111820"))
+    parent.add_child(input)
+    return input
+
+
+func _open_edit_record(record: Dictionary) -> void:
+    if edit_dialog == null:
+        return
+
+    editing_record_id = int(record.get("database_id", -1))
+    if editing_record_id < 0:
+        return
+
+    edit_dialog.title = "Datensatz #" + str(editing_record_id) + " bearbeiten"
+    edit_id_input.text = str(record.get("external_id", ""))
+    edit_device_input.text = str(record.get("geraeteart", ""))
+    edit_manufacturer_input.text = str(record.get("hersteller", ""))
+    edit_room_input.text = str(record.get("raum_etage", ""))
+    edit_dialog.popup_centered()
+    edit_id_input.grab_focus()
+    edit_id_input.caret_column = edit_id_input.text.length()
+
+
+func _save_edited_record() -> void:
+    if editing_record_id < 0 or ble == null or not database_ready:
+        return
+
+    var ok := bool(ble.databaseUpdateRecord(
+        editing_record_id,
+        edit_id_input.text.strip_edges(),
+        edit_device_input.text.strip_edges(),
+        edit_manufacturer_input.text.strip_edges(),
+        edit_room_input.text.strip_edges()
+    ))
+
+    if not ok:
+        _set_workflow("Datensatz konnte nicht geändert werden.", NOK_COLOR)
+        return
+
+    editing_record_id = -1
+    _refresh_data_view()
+
+
 func _build_data_overlay() -> void:
     data_overlay = PanelContainer.new()
     data_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -688,7 +772,19 @@ func _delete_pending_record() -> void:
 
 func _record_date(record: Dictionary) -> String:
     var created := str(record.get("created_at", ""))
-    return created.substr(0, 10) if created.length() >= 10 else created
+    if created.length() < 10:
+        return created
+
+    var parsed := Time.get_datetime_dict_from_datetime_string(created, false)
+    var day := int(parsed.get("day", 0))
+    var month := int(parsed.get("month", 0))
+    var year := int(parsed.get("year", 0))
+    var weekday := int(parsed.get("weekday", -1))
+    var weekday_names := ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"]
+    var prefix := ""
+    if weekday >= 0 and weekday < weekday_names.size():
+        prefix = weekday_names[weekday] + ", "
+    return prefix + ("%02d.%02d.%04d" % [day, month, year])
 
 
 func _record_time(record: Dictionary) -> String:
@@ -698,11 +794,19 @@ func _record_time(record: Dictionary) -> String:
     return ""
 
 
-func _record_middle_text(record: Dictionary) -> String:
+func _measurement_mode_text(record: Dictionary) -> String:
     var kind := str(record.get("measurement_kind", ""))
-    var kind_text := "Gerät" if kind == "GERAET" else ("Leitung" if kind == "LEITUNG" else "Messung")
-    var device := str(record.get("geraeteart", "")).strip_edges()
-    return kind_text if device.is_empty() else kind_text + " · " + device
+    var kind_text := "GERÄT" if kind == "GERAET" else ("LEITUNG" if kind == "LEITUNG" else "MESSUNG")
+
+    if kind == "GERAET":
+        var protection := "SK I" if record.get("rpe") != null else "SK II"
+        return "PASSIV - " + kind_text + " - " + protection
+
+    return "PASSIV - " + kind_text
+
+
+func _record_middle_text(record: Dictionary) -> String:
+    return _measurement_mode_text(record)
 
 
 func _record_measurement_text(record: Dictionary) -> String:
@@ -718,6 +822,25 @@ func _record_measurement_text(record: Dictionary) -> String:
     if record.get("u") != null:
         parts.append("U  " + _fmt(record.get("u")) + " V")
     return "\n".join(parts) if not parts.is_empty() else "Keine Messwerte"
+
+
+func _result_header_box(bg: Color, accent: Color, width: int = 2) -> StyleBoxFlat:
+    var style := StyleBoxFlat.new()
+    style.bg_color = bg
+    style.border_color = accent
+    style.border_width_left = width
+    style.border_width_top = width
+    style.border_width_right = width
+    style.border_width_bottom = 0
+    style.corner_radius_top_left = 13
+    style.corner_radius_top_right = 13
+    style.corner_radius_bottom_left = 0
+    style.corner_radius_bottom_right = 0
+    style.content_margin_left = 0
+    style.content_margin_right = 0
+    style.content_margin_top = 0
+    style.content_margin_bottom = 0
+    return style
 
 
 func _box(bg: Color, border: Color, width: int = 1, radius: int = 12) -> StyleBoxFlat:
