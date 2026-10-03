@@ -64,6 +64,7 @@ var suggestion_grid: GridContainer
 var suggestion_press_ms: Dictionary = {}
 var suggestion_long_press_handled: Dictionary = {}
 var command_timer: Timer
+var suggestion_timer: Timer
 
 var data_overlay: PanelContainer
 var data_list: VBoxContainer
@@ -115,6 +116,14 @@ func _build_timeout_timer() -> void:
     command_timer.wait_time = 4.0
     command_timer.timeout.connect(_on_command_timeout)
     add_child(command_timer)
+
+    # Suggestions must never block keystrokes. Wait briefly until typing pauses,
+    # then do one DB lookup instead of one synchronous lookup per character.
+    suggestion_timer = Timer.new()
+    suggestion_timer.one_shot = true
+    suggestion_timer.wait_time = 0.12
+    suggestion_timer.timeout.connect(_refresh_suggestions_now)
+    add_child(suggestion_timer)
 
 
 func _build_ui() -> void:
@@ -1329,15 +1338,16 @@ func _set_active_field(index: int, focus_input: bool = false) -> void:
         # field so the first typed character cannot drag the old value across.
         if common_input.has_ime_text():
             common_input.apply_ime()
-        field_values[FIELD_IDS[active_field_index]] = common_input.text
+
+        var committed := common_input.text
+        if FIELD_IDS[active_field_index] == "geraeteart":
+            committed = _expand_device_abbreviations(committed)
+        field_values[FIELD_IDS[active_field_index]] = committed
 
     active_field_index = clampi(index, 0, FIELD_IDS.size() - 1)
 
-    # Refresh the complete capture block after switching. The IME carry-over
-    # fix in v0.12 only refreshed the shared LineEdit and accidentally left
-    # the three coloured field cards on their old active visual state.
     _refresh_capture_ui()
-    _refresh_suggestions()
+    _refresh_suggestions(true)
 
     if focus_input and not capture_locked:
         common_input.grab_focus()
@@ -1368,9 +1378,25 @@ func _cycle_field() -> void:
 func _on_common_input_changed(value: String) -> void:
     if capture_locked or syncing_common_input:
         return
-    field_values[FIELD_IDS[active_field_index]] = value
+
+    var committed := value
+    if FIELD_IDS[active_field_index] == "geraeteart" and value.ends_with(" "):
+        committed = _expand_device_abbreviations(value)
+        if committed != value:
+            syncing_common_input = true
+            common_input.text = committed
+            common_input.caret_column = common_input.text.length()
+            syncing_common_input = false
+
+    field_values[FIELD_IDS[active_field_index]] = committed
     _refresh_capture_rows_only()
     _refresh_suggestions()
+
+
+func _expand_device_abbreviations(value: String) -> String:
+    if ble == null:
+        return value
+    return str(ble.expandDeviceAbbreviations(value))
 
 
 func _on_common_input_submitted(_value: String) -> void:
@@ -1435,7 +1461,17 @@ func _clear_capture_values() -> void:
     _refresh_capture_ui()
 
 
-func _refresh_suggestions() -> void:
+func _refresh_suggestions(immediate: bool = false) -> void:
+    if suggestion_timer == null or immediate or capture_locked:
+        if suggestion_timer != null:
+            suggestion_timer.stop()
+        _refresh_suggestions_now()
+        return
+
+    suggestion_timer.start()
+
+
+func _refresh_suggestions_now() -> void:
     if suggestion_grid == null:
         return
 
@@ -1489,6 +1525,7 @@ func _refresh_suggestions() -> void:
         var label_text := str(item.get("label", value)).strip_edges()
         var action := str(item.get("action", "fill"))
         var source := str(item.get("source", "dictionary"))
+        var dictionary_value := str(item.get("dictionary_value", value)).strip_edges()
         if value.is_empty():
             continue
 
@@ -1525,8 +1562,8 @@ func _refresh_suggestions() -> void:
 
         var key := button.get_instance_id()
         button.button_down.connect(_on_suggestion_button_down.bind(key))
-        button.button_up.connect(_on_suggestion_button_up.bind(key, field, value))
-        button.pressed.connect(_on_suggestion_pressed.bind(key, field, value, action))
+        button.button_up.connect(_on_suggestion_button_up.bind(key, field, value, dictionary_value))
+        button.pressed.connect(_on_suggestion_pressed.bind(key, field, value, action, dictionary_value))
         suggestion_grid.add_child(button)
 
 
@@ -1535,7 +1572,7 @@ func _on_suggestion_button_down(key: int) -> void:
     suggestion_long_press_handled[key] = false
 
 
-func _on_suggestion_button_up(key: int, field: String, value: String) -> void:
+func _on_suggestion_button_up(key: int, field: String, value: String, dictionary_value: String) -> void:
     var started := int(suggestion_press_ms.get(key, Time.get_ticks_msec()))
     var elapsed := Time.get_ticks_msec() - started
 
@@ -1548,15 +1585,21 @@ func _on_suggestion_button_up(key: int, field: String, value: String) -> void:
 
     if bool(ble.databaseDismissSuggestion(
         field,
-        value,
+        dictionary_value,
         str(field_values.get("geraeteart", ""))
     )):
         suggestion_long_press_handled[key] = true
         _set_workflow("Vorschlag ausgeblendet: " + value, Color("8fa0b4"))
-        _refresh_suggestions()
+        _refresh_suggestions(true)
 
 
-func _on_suggestion_pressed(key: int, field: String, value: String, action: String) -> void:
+func _on_suggestion_pressed(
+    key: int,
+    field: String,
+    value: String,
+    action: String,
+    dictionary_value: String
+) -> void:
     if bool(suggestion_long_press_handled.get(key, false)):
         suggestion_press_ms.erase(key)
         suggestion_long_press_handled.erase(key)
@@ -1570,7 +1613,7 @@ func _on_suggestion_pressed(key: int, field: String, value: String, action: Stri
             return
         if not bool(ble.databaseAcceptVocabulary(
             field,
-            value,
+            dictionary_value,
             str(field_values.get("geraeteart", ""))
         )):
             _set_workflow("Wörterbuch-Eintrag konnte nicht übernommen werden.", NOK_COLOR)
@@ -1585,7 +1628,7 @@ func _on_suggestion_pressed(key: int, field: String, value: String, action: Stri
         common_input.caret_column = common_input.text.length()
 
     _refresh_capture_rows_only()
-    _refresh_suggestions()
+    _refresh_suggestions(true)
 
 
 func _refresh_gesture_visual(direction: int = 0, progress: float = 0.0) -> void:
