@@ -50,6 +50,8 @@ var room_label: Button
 var today_label: Button
 var measurement_card: PanelContainer
 var measurement_header: PanelContainer
+var measurement_fade: PanelContainer
+var measurement_body: PanelContainer
 var measurement_title: Label
 var measurement_values: Label
 var workflow_label: Label
@@ -177,9 +179,10 @@ func _build_ui() -> void:
     topbar.add_child(connection_button)
 
     # --- Measurement instrument card ---------------------------------------
-    # Neutral body; only the result topbar carries the OK/NOK accent.
+    # The outer border itself carries the result colour at the top and fades
+    # back to the neutral border just below the header.
     measurement_card = PanelContainer.new()
-    measurement_card.add_theme_stylebox_override("panel", _box(Color("0b1724"), NEUTRAL_BORDER, 1, 16))
+    measurement_card.add_theme_stylebox_override("panel", _box(Color("0b1724"), Color("0b1724"), 0, 16))
     main_root.add_child(measurement_card)
 
     var measurement_shell := VBoxContainer.new()
@@ -203,12 +206,21 @@ func _build_ui() -> void:
     measurement_title.add_theme_color_override("font_color", Color("9fb1c4"))
     header_margin.add_child(measurement_title)
 
+    measurement_fade = PanelContainer.new()
+    measurement_fade.custom_minimum_size.y = 7
+    measurement_fade.add_theme_stylebox_override("panel", _result_fade_box(NEUTRAL_BORDER))
+    measurement_shell.add_child(measurement_fade)
+
+    measurement_body = PanelContainer.new()
+    measurement_body.add_theme_stylebox_override("panel", _result_body_box(Color("0b1724")))
+    measurement_shell.add_child(measurement_body)
+
     var measurement_margin := MarginContainer.new()
     measurement_margin.add_theme_constant_override("margin_left", 14)
     measurement_margin.add_theme_constant_override("margin_right", 14)
-    measurement_margin.add_theme_constant_override("margin_top", 11)
+    measurement_margin.add_theme_constant_override("margin_top", 8)
     measurement_margin.add_theme_constant_override("margin_bottom", 12)
-    measurement_shell.add_child(measurement_margin)
+    measurement_body.add_child(measurement_margin)
 
     var measurement_box := VBoxContainer.new()
     measurement_box.add_theme_constant_override("separation", 5)
@@ -427,7 +439,8 @@ func _open_edit_record(record: Dictionary) -> void:
     measurement_title.text = "DATENSATZ #" + str(editing_record_id) + " BEARBEITEN"
     measurement_title.add_theme_color_override("font_color", result_color)
     measurement_header.add_theme_stylebox_override("panel", _result_header_box(Color("111d29"), result_color, 2))
-    measurement_card.add_theme_stylebox_override("panel", _box(Color("0b1724"), NEUTRAL_BORDER, 1, 16))
+    measurement_fade.add_theme_stylebox_override("panel", _result_fade_box(result_color))
+    measurement_body.add_theme_stylebox_override("panel", _result_body_box(Color("0b1724")))
     measurement_values.text = _measurement_mode_text(record) + "  ·  " + _record_measurement_summary(record)
     measurement_values.add_theme_color_override("font_color", Color("eef2f6"))
     _set_workflow("Änderungen mit ↓ übernehmen · ↑ abbrechen", Color("8fa0b4"))
@@ -1183,8 +1196,9 @@ func _show_waiting_state() -> void:
     measurement_title.add_theme_color_override("font_color", Color("9aaabd"))
     measurement_values.text = "Wartet auf Messung"
     measurement_values.add_theme_color_override("font_color", Color("e8eef5"))
-    measurement_card.add_theme_stylebox_override("panel", _box(Color("0b1724"), NEUTRAL_BORDER, 1, 16))
     measurement_header.add_theme_stylebox_override("panel", _result_header_box(Color("111d29"), NEUTRAL_BORDER, 1))
+    measurement_fade.add_theme_stylebox_override("panel", _result_fade_box(NEUTRAL_BORDER))
+    measurement_body.add_theme_stylebox_override("panel", _result_body_box(Color("0b1724")))
     _refresh_gesture_visual()
 
 
@@ -1195,8 +1209,9 @@ func _show_real_measurement(measurement: Dictionary) -> void:
 
     measurement_title.text = _measurement_mode_text(measurement) + "    " + ("OK" if ok else "NICHT OK")
     measurement_title.add_theme_color_override("font_color", result_color)
-    measurement_card.add_theme_stylebox_override("panel", _box(Color("0b1724"), NEUTRAL_BORDER, 1, 16))
     measurement_header.add_theme_stylebox_override("panel", _result_header_box(Color("111d29"), result_color, 2))
+    measurement_fade.add_theme_stylebox_override("panel", _result_fade_box(result_color))
+    measurement_body.add_theme_stylebox_override("panel", _result_body_box(Color("0b1724")))
 
     var parts: Array[String] = []
     if measurement.get("rpe") != null:
