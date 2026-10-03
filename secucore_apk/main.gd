@@ -60,6 +60,9 @@ var gesture_button: Button
 var common_input: LineEdit
 var suggestion_panel: PanelContainer
 var suggestion_hint: Label
+var suggestion_grid: GridContainer
+var suggestion_press_ms: Dictionary = {}
+var suggestion_long_press_handled: Dictionary = {}
 var command_timer: Timer
 
 var data_overlay: PanelContainer
@@ -287,26 +290,36 @@ func _build_ui() -> void:
     common_input.text_submitted.connect(_on_common_input_submitted)
     main_root.add_child(common_input)
 
-    # --- Reserved future suggestion space: always between input and keyboard -
+    # --- Two-row suggestion area: shared by live capture and record editing ---
     suggestion_panel = PanelContainer.new()
-    suggestion_panel.custom_minimum_size.y = 124
+    suggestion_panel.custom_minimum_size.y = 128
     suggestion_panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
     suggestion_panel.add_theme_stylebox_override("panel", _box(Color("09131e"), Color("18283a"), 1, 14))
     main_root.add_child(suggestion_panel)
 
     var suggestion_margin := MarginContainer.new()
-    suggestion_margin.add_theme_constant_override("margin_left", 12)
-    suggestion_margin.add_theme_constant_override("margin_right", 12)
-    suggestion_margin.add_theme_constant_override("margin_top", 10)
-    suggestion_margin.add_theme_constant_override("margin_bottom", 10)
+    suggestion_margin.add_theme_constant_override("margin_left", 8)
+    suggestion_margin.add_theme_constant_override("margin_right", 8)
+    suggestion_margin.add_theme_constant_override("margin_top", 7)
+    suggestion_margin.add_theme_constant_override("margin_bottom", 7)
     suggestion_panel.add_child(suggestion_margin)
 
+    var suggestion_box := VBoxContainer.new()
+    suggestion_box.add_theme_constant_override("separation", 5)
+    suggestion_margin.add_child(suggestion_box)
+
     suggestion_hint = Label.new()
-    suggestion_hint.text = "WORTVORSCHLÄGE · 2 REIHEN RESERVIERT"
-    suggestion_hint.add_theme_font_size_override("font_size", 14)
-    suggestion_hint.add_theme_color_override("font_color", Color("34485e"))
-    suggestion_hint.vertical_alignment = VERTICAL_ALIGNMENT_TOP
-    suggestion_margin.add_child(suggestion_hint)
+    suggestion_hint.text = "Tippen: übernehmen  ·  halten: ausblenden"
+    suggestion_hint.add_theme_font_size_override("font_size", 12)
+    suggestion_hint.add_theme_color_override("font_color", Color("54687d"))
+    suggestion_box.add_child(suggestion_hint)
+
+    suggestion_grid = GridContainer.new()
+    suggestion_grid.columns = 3
+    suggestion_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    suggestion_grid.add_theme_constant_override("h_separation", 6)
+    suggestion_grid.add_theme_constant_override("v_separation", 6)
+    suggestion_box.add_child(suggestion_grid)
 
     _refresh_capture_ui()
     _refresh_gesture_visual()
@@ -456,6 +469,10 @@ func _save_edited_capture_record() -> void:
         _set_workflow("Datensatz konnte nicht geändert werden.", NOK_COLOR)
         return
 
+    ble.databaseObserveVocabulary(
+        str(field_values["geraeteart"]).strip_edges(),
+        str(field_values["hersteller"]).strip_edges()
+    )
     _finish_capture_edit(true)
 
 
@@ -1316,6 +1333,7 @@ func _set_active_field(index: int, focus_input: bool = false) -> void:
 
     active_field_index = clampi(index, 0, FIELD_IDS.size() - 1)
     _sync_common_input_from_active()
+    _refresh_suggestions()
 
     if focus_input and not capture_locked:
         common_input.grab_focus()
@@ -1348,6 +1366,7 @@ func _on_common_input_changed(value: String) -> void:
         return
     field_values[FIELD_IDS[active_field_index]] = value
     _refresh_capture_rows_only()
+    _refresh_suggestions()
 
 
 func _on_common_input_submitted(_value: String) -> void:
@@ -1402,6 +1421,7 @@ func _set_capture_locked(locked: bool) -> void:
         common_input.release_focus()
     _refresh_capture_ui()
     _refresh_gesture_visual()
+    _refresh_suggestions()
 
 
 func _clear_capture_values() -> void:
@@ -1523,6 +1543,11 @@ func _save_current_measurement() -> void:
         _set_workflow(message, Color("ff7885"))
         return
 
+    if ble != null and database_ready:
+        ble.databaseObserveVocabulary(
+            str(field_values["geraeteart"]).strip_edges(),
+            str(field_values["hersteller"]).strip_edges()
+        )
     _refresh_database_counts()
     _begin_post_measurement_action("GESPEICHERT")
 
