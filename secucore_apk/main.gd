@@ -696,16 +696,15 @@ func _add_data_record_card(record: Dictionary) -> void:
     var ok := bool(record.get("is_ok", true))
     var result_color: Color = OK_COLOR if ok else NOK_COLOR
 
-    # Neutral card body. The result colour lives only in the topbar so OK/NOK
-    # stays obvious without turning the entire dataset into a green/red frame.
     var card := PanelContainer.new()
-    card.add_theme_stylebox_override("panel", _box(Color("0d1824"), NEUTRAL_BORDER, 1, 14))
+    card.add_theme_stylebox_override("panel", _box(Color("0d1824"), Color("0d1824"), 0, 14))
     data_list.add_child(card)
 
     var shell := VBoxContainer.new()
     shell.add_theme_constant_override("separation", 0)
     card.add_child(shell)
 
+    # Topbar: only # + time on the left, OK/N-OK on the right.
     var topbar := PanelContainer.new()
     topbar.add_theme_stylebox_override("panel", _result_header_box(Color("111d29"), result_color, 2))
     shell.add_child(topbar)
@@ -714,94 +713,100 @@ func _add_data_record_card(record: Dictionary) -> void:
     top_margin.add_theme_constant_override("margin_left", 12)
     top_margin.add_theme_constant_override("margin_right", 12)
     top_margin.add_theme_constant_override("margin_top", 8)
-    top_margin.add_theme_constant_override("margin_bottom", 8)
+    top_margin.add_theme_constant_override("margin_bottom", 7)
     topbar.add_child(top_margin)
 
     var top := HBoxContainer.new()
     top.custom_minimum_size.y = 42
-    top.add_theme_constant_override("separation", 9)
     top_margin.add_child(top)
 
     var number_time := Label.new()
     number_time.text = "#" + str(int(record.get("database_id", -1))) + "  " + _record_time(record)
-    number_time.add_theme_font_size_override("font_size", 18)
-    number_time.add_theme_color_override("font_color", Color("b7c1cc"))
+    number_time.add_theme_font_size_override("font_size", 21)
+    number_time.add_theme_color_override("font_color", Color("c5ced7"))
+    number_time.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     number_time.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     top.add_child(number_time)
 
-    var mode_holder := CenterContainer.new()
-    mode_holder.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    top.add_child(mode_holder)
-
-    var mode := Label.new()
-    mode.text = _measurement_mode_text(record)
-    mode.custom_minimum_size.x = 250
-    mode.add_theme_font_size_override("font_size", 19)
-    mode.add_theme_color_override("font_color", Color("eef2f6"))
-    mode.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-    mode.text_overrun_behavior = TextServer.OVERRUN_TRIM_WORD_ELLIPSIS
-    mode_holder.add_child(mode)
-
     var result := Label.new()
-    result.text = "OK" if ok else "NICHT OK"
-    result.add_theme_font_size_override("font_size", 18)
+    result.text = "OK" if ok else "N-OK"
+    result.add_theme_font_size_override("font_size", 21)
     result.add_theme_color_override("font_color", result_color)
     result.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     top.add_child(result)
 
+    var fade := PanelContainer.new()
+    fade.custom_minimum_size.y = 7
+    fade.add_theme_stylebox_override("panel", _result_fade_box(result_color))
+    shell.add_child(fade)
+
+    var body := PanelContainer.new()
+    body.add_theme_stylebox_override("panel", _result_body_box(Color("0d1824")))
+    shell.add_child(body)
+
     var body_margin := MarginContainer.new()
     body_margin.add_theme_constant_override("margin_left", 12)
-    body_margin.add_theme_constant_override("margin_right", 10)
-    body_margin.add_theme_constant_override("margin_top", 10)
+    body_margin.add_theme_constant_override("margin_right", 12)
+    body_margin.add_theme_constant_override("margin_top", 8)
     body_margin.add_theme_constant_override("margin_bottom", 9)
-    shell.add_child(body_margin)
+    body.add_child(body_margin)
 
     var box := VBoxContainer.new()
-    box.add_theme_constant_override("separation", 9)
+    box.add_theme_constant_override("separation", 7)
     body_margin.add_child(box)
 
-    # Middle row: device type + manufacturer on the left, ID on the right.
-    var middle := HBoxContainer.new()
-    middle.custom_minimum_size.y = 64
-    middle.add_theme_constant_override("separation", 12)
-    box.add_child(middle)
+    # Middle row, line 1: mode left, ID right.
+    var meta_top := HBoxContainer.new()
+    meta_top.custom_minimum_size.y = 34
+    meta_top.add_theme_constant_override("separation", 10)
+    box.add_child(meta_top)
 
-    var left_meta := VBoxContainer.new()
-    left_meta.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-    left_meta.add_theme_constant_override("separation", 3)
-    middle.add_child(left_meta)
-
-    var device := Label.new()
-    device.text = str(record.get("geraeteart", "")).strip_edges()
-    if device.text.is_empty():
-        device.text = "Geräteart —"
-    device.add_theme_font_size_override("font_size", 20)
-    device.add_theme_color_override("font_color", DEVICE_COLOR)
-    device.text_overrun_behavior = TextServer.OVERRUN_TRIM_WORD_ELLIPSIS
-    left_meta.add_child(device)
-
-    var manufacturer := Label.new()
-    manufacturer.text = str(record.get("hersteller", "")).strip_edges()
-    if manufacturer.text.is_empty():
-        manufacturer.text = "Hersteller —"
-    manufacturer.add_theme_font_size_override("font_size", 19)
-    manufacturer.add_theme_color_override("font_color", MANUFACTURER_COLOR)
-    manufacturer.text_overrun_behavior = TextServer.OVERRUN_TRIM_WORD_ELLIPSIS
-    left_meta.add_child(manufacturer)
+    var mode := Label.new()
+    mode.text = _measurement_mode_text(record)
+    mode.add_theme_font_size_override("font_size", 21)
+    mode.add_theme_color_override("font_color", Color("eef2f6"))
+    mode.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    mode.text_overrun_behavior = TextServer.OVERRUN_TRIM_WORD_ELLIPSIS
+    meta_top.add_child(mode)
 
     var ident := Label.new()
     ident.text = str(record.get("external_id", "")).strip_edges()
     if ident.text.is_empty():
         ident.text = "ID —"
-    ident.custom_minimum_size.x = 190
+    ident.custom_minimum_size.x = 150
     ident.add_theme_font_size_override("font_size", 22)
     ident.add_theme_color_override("font_color", ID_COLOR)
     ident.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-    ident.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
     ident.text_overrun_behavior = TextServer.OVERRUN_TRIM_WORD_ELLIPSIS
-    middle.add_child(ident)
+    meta_top.add_child(ident)
 
-    # Bottom action row follows the familiar Termux data card.
+    # Middle row, line 2: device type left, manufacturer right.
+    var meta_bottom := HBoxContainer.new()
+    meta_bottom.custom_minimum_size.y = 34
+    meta_bottom.add_theme_constant_override("separation", 10)
+    box.add_child(meta_bottom)
+
+    var device := Label.new()
+    device.text = str(record.get("geraeteart", "")).strip_edges()
+    if device.text.is_empty():
+        device.text = "Geräteart —"
+    device.add_theme_font_size_override("font_size", 21)
+    device.add_theme_color_override("font_color", DEVICE_COLOR)
+    device.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    device.text_overrun_behavior = TextServer.OVERRUN_TRIM_WORD_ELLIPSIS
+    meta_bottom.add_child(device)
+
+    var manufacturer := Label.new()
+    manufacturer.text = str(record.get("hersteller", "")).strip_edges()
+    if manufacturer.text.is_empty():
+        manufacturer.text = "Hersteller —"
+    manufacturer.custom_minimum_size.x = 170
+    manufacturer.add_theme_font_size_override("font_size", 21)
+    manufacturer.add_theme_color_override("font_color", MANUFACTURER_COLOR)
+    manufacturer.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+    manufacturer.text_overrun_behavior = TextServer.OVERRUN_TRIM_WORD_ELLIPSIS
+    meta_bottom.add_child(manufacturer)
+
     var action_row := HBoxContainer.new()
     action_row.add_theme_constant_override("separation", 7)
     box.add_child(action_row)
@@ -809,7 +814,7 @@ func _add_data_record_card(record: Dictionary) -> void:
     var details_button := Button.new()
     details_button.text = "Daten ▼"
     details_button.custom_minimum_size.y = 50
-    details_button.add_theme_font_size_override("font_size", 18)
+    details_button.add_theme_font_size_override("font_size", 19)
     details_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
     details_button.add_theme_stylebox_override("normal", _box(Color("101b27"), Color("243546"), 1, 10))
     action_row.add_child(details_button)
@@ -834,15 +839,10 @@ func _add_data_record_card(record: Dictionary) -> void:
 
     var details_box := VBoxContainer.new()
     details_box.visible = false
-    details_box.add_theme_constant_override("separation", 5)
+    details_box.add_theme_constant_override("separation", 8)
     box.add_child(details_box)
 
-    var values := Label.new()
-    values.text = _record_measurement_text(record)
-    values.add_theme_font_size_override("font_size", 18)
-    values.add_theme_color_override("font_color", Color("c8d1da"))
-    values.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-    details_box.add_child(values)
+    _add_measurement_table(record, details_box)
 
     var stamp := Label.new()
     stamp.text = "Messzeit: " + str(record.get("measurement_timestamp", "—"))
