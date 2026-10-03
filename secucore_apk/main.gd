@@ -1740,7 +1740,7 @@ func _persist_measurement(measurement: Dictionary) -> bool:
     record["geraeteart"] = str(field_values["geraeteart"])
     record["hersteller"] = str(field_values["hersteller"])
     record["raum_etage"] = current_room
-    record["source"] = "SecuCore Android v0.10"
+    record["source"] = "SecuCore Android v0.13"
 
     # Direct call on purpose: @UsedByGodot plugin methods are bridged methods and
     # must not be rejected merely because Object.has_method() does not list them.
