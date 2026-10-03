@@ -902,7 +902,7 @@ func _measurement_mode_text(record: Dictionary) -> String:
     var kind := str(record.get("measurement_kind", ""))
     var kind_text := "GERÄT" if kind == "GERAET" else ("LEITUNG" if kind == "LEITUNG" else "MESSUNG")
 
-    if kind == "GERAET":
+    if kind in ["GERAET", "LEITUNG"]:
         var protection := "SK I" if record.get("rpe") != null else "SK II"
         return "PASSIV - " + kind_text + " - " + protection
 
@@ -911,6 +911,19 @@ func _measurement_mode_text(record: Dictionary) -> String:
 
 func _record_middle_text(record: Dictionary) -> String:
     return _measurement_mode_text(record)
+
+
+func _record_measurement_summary(record: Dictionary) -> String:
+    var parts: Array[String] = []
+    if record.get("rpe") != null:
+        parts.append("RPE " + _fmt(record.get("rpe")) + " Ω")
+    if record.get("rins") != null:
+        parts.append("RISO " + _fmt(record.get("rins")) + " MΩ")
+    if record.get("ipe") != null:
+        parts.append("IPE " + _fmt(record.get("ipe")) + " mA")
+    if record.get("u") != null:
+        parts.append("U " + _fmt(record.get("u")) + " V")
+    return " · ".join(parts) if not parts.is_empty() else "Keine Messwerte"
 
 
 func _record_measurement_text(record: Dictionary) -> String:
@@ -928,9 +941,85 @@ func _record_measurement_text(record: Dictionary) -> String:
     return "\n".join(parts) if not parts.is_empty() else "Keine Messwerte"
 
 
+func _add_measurement_table(record: Dictionary, parent: VBoxContainer) -> void:
+    var table_panel := PanelContainer.new()
+    table_panel.add_theme_stylebox_override("panel", _box(Color("0a141f"), Color("26384a"), 1, 10))
+    parent.add_child(table_panel)
+
+    var margin := MarginContainer.new()
+    margin.add_theme_constant_override("margin_left", 10)
+    margin.add_theme_constant_override("margin_right", 10)
+    margin.add_theme_constant_override("margin_top", 8)
+    margin.add_theme_constant_override("margin_bottom", 8)
+    table_panel.add_child(margin)
+
+    var grid := GridContainer.new()
+    grid.columns = 4
+    grid.add_theme_constant_override("h_separation", 12)
+    grid.add_theme_constant_override("v_separation", 6)
+    margin.add_child(grid)
+
+    _add_table_cell(grid, "Messung", HORIZONTAL_ALIGNMENT_LEFT, Color("8fa0b4"), 15)
+    _add_table_cell(grid, "Wert", HORIZONTAL_ALIGNMENT_RIGHT, Color("8fa0b4"), 15)
+    _add_table_cell(grid, "GW", HORIZONTAL_ALIGNMENT_RIGHT, Color("8fa0b4"), 15)
+    _add_table_cell(grid, "", HORIZONTAL_ALIGNMENT_RIGHT, Color("8fa0b4"), 15)
+
+    _append_measurement_row(grid, record, "RPE", "rpe", "rpe_limit", "Ω", true)
+    _append_measurement_row(grid, record, "ΔRPE", "drpe", "drpe_limit", "Ω", true)
+    _append_measurement_row(grid, record, "RISO", "rins", "rins_limit", "MΩ", false)
+    _append_measurement_row(grid, record, "UISO", "uiso", "uiso_limit", "V", false)
+    _append_measurement_row(grid, record, "IPE", "ipe", "ipe_limit", "mA", true)
+    _append_measurement_row(grid, record, "U", "u", "u_limit", "V", true)
+
+
+func _append_measurement_row(
+    grid: GridContainer,
+    record: Dictionary,
+    label_text: String,
+    value_key: String,
+    limit_key: String,
+    unit: String,
+    lower_is_better: bool
+) -> void:
+    if record.get(value_key) == null:
+        return
+
+    var value := float(record.get(value_key, 0.0))
+    var has_limit := record.get(limit_key) != null
+    var limit := float(record.get(limit_key, 0.0)) if has_limit else 0.0
+    var status_text := "—"
+    var status_color := Color("75879a")
+
+    if has_limit:
+        var row_ok := value <= limit if lower_is_better else value >= limit
+        status_text = "OK" if row_ok else "N-OK"
+        status_color = OK_COLOR if row_ok else NOK_COLOR
+
+    _add_table_cell(grid, label_text, HORIZONTAL_ALIGNMENT_LEFT, Color("d7e0e8"), 17)
+    _add_table_cell(grid, _fmt(value) + " " + unit, HORIZONTAL_ALIGNMENT_RIGHT, Color("eef2f6"), 17)
+    _add_table_cell(grid, (_fmt(limit) + " " + unit) if has_limit else "—", HORIZONTAL_ALIGNMENT_RIGHT, Color("aab7c4"), 17)
+    _add_table_cell(grid, status_text, HORIZONTAL_ALIGNMENT_RIGHT, status_color, 16)
+
+
+func _add_table_cell(
+    grid: GridContainer,
+    text_value: String,
+    alignment: HorizontalAlignment,
+    color: Color,
+    font_size: int
+) -> void:
+    var label := Label.new()
+    label.text = text_value
+    label.add_theme_font_size_override("font_size", font_size)
+    label.add_theme_color_override("font_color", color)
+    label.horizontal_alignment = alignment
+    label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+    grid.add_child(label)
+
+
 func _result_header_box(bg: Color, accent: Color, width: int = 2) -> StyleBoxFlat:
     var style := StyleBoxFlat.new()
-    style.bg_color = bg
+    style.bg_color = bg.lerp(accent, 0.06)
     style.border_color = accent
     style.border_width_left = width
     style.border_width_top = width
@@ -940,10 +1029,37 @@ func _result_header_box(bg: Color, accent: Color, width: int = 2) -> StyleBoxFla
     style.corner_radius_top_right = 13
     style.corner_radius_bottom_left = 0
     style.corner_radius_bottom_right = 0
+    style.shadow_color = Color(accent.r, accent.g, accent.b, 0.12)
+    style.shadow_size = 4
+    style.shadow_offset = Vector2(0, 2)
     style.content_margin_left = 0
     style.content_margin_right = 0
     style.content_margin_top = 0
     style.content_margin_bottom = 0
+    return style
+
+
+func _result_fade_box(accent: Color) -> StyleBoxFlat:
+    var style := StyleBoxFlat.new()
+    style.bg_color = Color("0d1824")
+    style.border_color = accent.lerp(NEUTRAL_BORDER, 0.58)
+    style.border_width_left = 2
+    style.border_width_right = 2
+    style.border_width_top = 0
+    style.border_width_bottom = 0
+    return style
+
+
+func _result_body_box(bg: Color) -> StyleBoxFlat:
+    var style := StyleBoxFlat.new()
+    style.bg_color = bg
+    style.border_color = NEUTRAL_BORDER
+    style.border_width_left = 1
+    style.border_width_right = 1
+    style.border_width_bottom = 1
+    style.border_width_top = 0
+    style.corner_radius_bottom_left = 13
+    style.corner_radius_bottom_right = 13
     return style
 
 
