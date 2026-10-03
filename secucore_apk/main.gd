@@ -1135,11 +1135,35 @@ func _on_field_pressed(index: int) -> void:
 
 
 func _set_active_field(index: int, focus_input: bool = false) -> void:
+    if common_input != null and not capture_locked:
+        # SwiftKey/Android can keep an IME composition tied to the previous field.
+        # Commit it before switching, then rebuild the shared input from the new
+        # field so the first typed character cannot drag the old value across.
+        if common_input.has_ime_text():
+            common_input.apply_ime()
+        field_values[FIELD_IDS[active_field_index]] = common_input.text
+
     active_field_index = clampi(index, 0, FIELD_IDS.size() - 1)
-    _refresh_capture_ui()
+    _sync_common_input_from_active()
+
     if focus_input and not capture_locked:
         common_input.grab_focus()
+        common_input.edit()
         common_input.caret_column = common_input.text.length()
+
+
+func _sync_common_input_from_active() -> void:
+    if common_input == null:
+        return
+
+    if common_input.has_ime_text():
+        common_input.cancel_ime()
+
+    syncing_common_input = true
+    common_input.text = "" if capture_locked else str(field_values.get(FIELD_IDS[active_field_index], ""))
+    common_input.caret_column = common_input.text.length()
+    common_input.deselect()
+    syncing_common_input = false
 
 
 func _cycle_field() -> void:
@@ -1149,7 +1173,7 @@ func _cycle_field() -> void:
 
 
 func _on_common_input_changed(value: String) -> void:
-    if capture_locked:
+    if capture_locked or syncing_common_input:
         return
     field_values[FIELD_IDS[active_field_index]] = value
     _refresh_capture_rows_only()
@@ -1190,15 +1214,15 @@ func _refresh_capture_ui() -> void:
     var active_color: Color = FIELD_COLORS[active_field_index]
     common_input.placeholder_text = "Warte auf Messdaten" if capture_locked else FIELD_NAMES[active_field_index]
     if capture_locked:
-        common_input.text = ""
         common_input.add_theme_stylebox_override("normal", _box(Color("c2c9d0"), Color("5d6874"), 2, 14))
         common_input.add_theme_stylebox_override("focus", _box(Color("c2c9d0"), Color("5d6874"), 2, 14))
         common_input.add_theme_stylebox_override("read_only", _box(Color("89939e"), Color("4c5967"), 2, 14))
     else:
-        common_input.text = str(field_values.get(FIELD_IDS[active_field_index], ""))
         common_input.add_theme_stylebox_override("normal", _box(Color("eef2f5"), active_color, 3, 14))
         common_input.add_theme_stylebox_override("focus", _box(Color("ffffff"), active_color, 4, 14))
         common_input.add_theme_stylebox_override("read_only", _box(Color("eef2f5"), active_color, 3, 14))
+
+    _sync_common_input_from_active()
 
 
 func _set_capture_locked(locked: bool) -> void:
