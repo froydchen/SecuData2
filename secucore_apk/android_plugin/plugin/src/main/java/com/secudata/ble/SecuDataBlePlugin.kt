@@ -490,13 +490,19 @@ class SecuDataBlePlugin(godot: Godot) : GodotPlugin(godot) {
         val result = JSONArray()
         val seen = LinkedHashSet<String>()
 
-        fun add(value: String, action: String = "fill", source: String = "dictionary", label: String = value) {
+        fun add(
+            value: String,
+            action: String = "fill",
+            source: String = "dictionary",
+            label: String = value,
+            respectQuery: Boolean = true,
+        ) {
             val clean = value.trim()
             if (clean.isBlank()) return
             val normalized = normalizeVocabulary(clean)
             if (normalized.isBlank() || normalized in seen) return
             if (fieldKey != "ID" && isVocabularyDismissed(db, fieldKey, normalized, deviceType)) return
-            if (queryNorm.isNotBlank() && !matchesVocabulary(clean, queryNorm)) return
+            if (respectQuery && queryNorm.isNotBlank() && !matchesVocabulary(clean, queryNorm)) return
             seen += normalized
             result.put(
                 JSONObject()
@@ -560,9 +566,9 @@ class SecuDataBlePlugin(godot: Godot) : GodotPlugin(godot) {
                         if (candidate.isNotBlank() && !isKnownDevice(candidate, db)) {
                             val similar = findSimilarDevice(candidate, db)
                             if (similar.isNotBlank()) {
-                                add(similar, action = "fill", source = "similar", label = "≈ $similar")
+                                add(similar, action = "fill", source = "similar", label = "≈ $similar", respectQuery = false)
                             } else if (!isVocabularyDismissed(db, "DEVICE", normalizeVocabulary(candidate), "")) {
-                                add(candidate, action = "add", source = "unknown", label = "＋ $candidate")
+                                add(candidate, action = "add", source = "unknown", label = "＋ $candidate", respectQuery = false)
                             }
                         }
                     }
@@ -620,7 +626,7 @@ class SecuDataBlePlugin(godot: Godot) : GodotPlugin(godot) {
                             if (similar.isNotBlank()) {
                                 add(similar, action = "fill", source = "similar", label = "≈ $similar")
                             } else if (!isVocabularyDismissed(db, "MANUFACTURER", queryNorm, deviceKey)) {
-                                add(query, action = "add", source = "unknown", label = "＋ $query")
+                                add(query, action = "add", source = "unknown", label = "＋ $query", respectQuery = false)
                             }
                         }
                     }
