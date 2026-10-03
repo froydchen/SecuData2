@@ -369,52 +369,6 @@ func _build_delete_dialog() -> void:
     add_child(delete_dialog)
 
 
-func _build_edit_dialog() -> void:
-    edit_dialog = AcceptDialog.new()
-    edit_dialog.title = "Datensatz bearbeiten"
-    edit_dialog.min_size = Vector2i(540, 560)
-    edit_dialog.confirmed.connect(_save_edited_record)
-    add_child(edit_dialog)
-
-    var margin := MarginContainer.new()
-    margin.add_theme_constant_override("margin_left", 18)
-    margin.add_theme_constant_override("margin_right", 18)
-    margin.add_theme_constant_override("margin_top", 14)
-    margin.add_theme_constant_override("margin_bottom", 14)
-    edit_dialog.add_child(margin)
-
-    var box := VBoxContainer.new()
-    box.add_theme_constant_override("separation", 10)
-    margin.add_child(box)
-
-    var title := Label.new()
-    title.text = "Gespeicherte Angaben"
-    title.add_theme_font_size_override("font_size", 24)
-    box.add_child(title)
-
-    edit_id_input = _add_edit_field(box, "ID", ID_COLOR)
-    edit_device_input = _add_edit_field(box, "Geräteart", DEVICE_COLOR)
-    edit_manufacturer_input = _add_edit_field(box, "Hersteller", MANUFACTURER_COLOR)
-    edit_room_input = _add_edit_field(box, "Raum", Color("c9d2dc"))
-
-
-func _add_edit_field(parent: VBoxContainer, label_text: String, accent: Color) -> LineEdit:
-    var label := Label.new()
-    label.text = label_text
-    label.add_theme_font_size_override("font_size", 17)
-    label.add_theme_color_override("font_color", accent)
-    parent.add_child(label)
-
-    var input := LineEdit.new()
-    input.custom_minimum_size.y = 64
-    input.add_theme_font_size_override("font_size", 23)
-    input.add_theme_stylebox_override("normal", _box(Color("eef2f5"), accent, 2, 12))
-    input.add_theme_stylebox_override("focus", _box(Color("ffffff"), accent, 3, 12))
-    input.add_theme_color_override("font_color", Color("111820"))
-    parent.add_child(input)
-    return input
-
-
 func _open_edit_record(record: Dictionary) -> void:
     editing_record_id = int(record.get("database_id", -1))
     if editing_record_id < 0:
