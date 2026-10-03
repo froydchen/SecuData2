@@ -300,7 +300,6 @@ func _build_ui() -> void:
     _refresh_gesture_visual()
     _build_room_dialog()
     _build_delete_dialog()
-    _build_edit_dialog()
     _build_data_overlay()
 
 
@@ -405,41 +404,117 @@ func _add_edit_field(parent: VBoxContainer, label_text: String, accent: Color) -
 
 
 func _open_edit_record(record: Dictionary) -> void:
-    if edit_dialog == null:
-        return
-
     editing_record_id = int(record.get("database_id", -1))
     if editing_record_id < 0:
         return
 
-    edit_dialog.title = "Datensatz #" + str(editing_record_id) + " bearbeiten"
-    edit_id_input.text = str(record.get("external_id", ""))
-    edit_device_input.text = str(record.get("geraeteart", ""))
-    edit_manufacturer_input.text = str(record.get("hersteller", ""))
-    edit_room_input.text = str(record.get("raum_etage", ""))
-    edit_dialog.popup_centered()
-    edit_id_input.grab_focus()
-    edit_id_input.caret_column = edit_id_input.text.length()
+    editing_record_snapshot = record.duplicate(true)
+    edit_previous_room = current_room
+    current_room = str(record.get("raum_etage", ""))
+    _refresh_room_label()
+
+    field_values["id"] = str(record.get("external_id", ""))
+    field_values["geraeteart"] = str(record.get("geraeteart", ""))
+    field_values["hersteller"] = str(record.get("hersteller", ""))
+
+    # Reuse the exact live-capture controls. This means suggestions, field
+    # colours and the gesture button automatically behave identically here.
+    current_measurement = record.duplicate(true)
+    _set_capture_locked(false)
+    _set_active_field(0, false)
+
+    var result_color: Color = OK_COLOR if bool(record.get("is_ok", true)) else NOK_COLOR
+    measurement_title.text = "DATENSATZ #" + str(editing_record_id) + " BEARBEITEN"
+    measurement_title.add_theme_color_override("font_color", result_color)
+    measurement_header.add_theme_stylebox_override("panel", _result_header_box(Color("111d29"), result_color, 2))
+    measurement_card.add_theme_stylebox_override("panel", _box(Color("0b1724"), NEUTRAL_BORDER, 1, 16))
+    measurement_values.text = _measurement_mode_text(record) + "  ·  " + _record_measurement_summary(record)
+    measurement_values.add_theme_color_override("font_color", Color("eef2f6"))
+    _set_workflow("Änderungen mit ↓ übernehmen · ↑ abbrechen", Color("8fa0b4"))
+    _refresh_gesture_visual()
+
+    common_input.release_focus()
+    DisplayServer.virtual_keyboard_hide()
+
+    if data_overlay != null:
+        var tween := create_tween()
+        tween.set_parallel(true)
+        tween.tween_property(data_overlay, "modulate:a", 0.0, 0.10).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+        tween.tween_property(main_root, "modulate:a", 1.0, 0.12)
+        tween.chain().tween_callback(func():
+            data_overlay.visible = false
+            data_overlay.modulate.a = 1.0
+            _animate_capture_in()
+        )
 
 
-func _save_edited_record() -> void:
+func _animate_capture_in() -> void:
+    capture_row.modulate.a = 0.0
+    common_input.modulate.a = 0.0
+    suggestion_panel.modulate.a = 0.0
+    capture_row.scale = Vector2(0.985, 0.985)
+    common_input.scale = Vector2(0.985, 0.985)
+    suggestion_panel.scale = Vector2(0.985, 0.985)
+
+    var tween := create_tween()
+    tween.set_parallel(true)
+    tween.tween_property(capture_row, "modulate:a", 1.0, 0.14)
+    tween.tween_property(common_input, "modulate:a", 1.0, 0.14)
+    tween.tween_property(suggestion_panel, "modulate:a", 1.0, 0.14)
+    tween.tween_property(capture_row, "scale", Vector2.ONE, 0.14).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+    tween.tween_property(common_input, "scale", Vector2.ONE, 0.14).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+    tween.tween_property(suggestion_panel, "scale", Vector2.ONE, 0.14).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+    tween.chain().tween_callback(func():
+        _set_active_field(0, true)
+    )
+
+
+func _save_edited_capture_record() -> void:
     if editing_record_id < 0 or ble == null or not database_ready:
         return
 
+    if common_input.has_ime_text():
+        common_input.apply_ime()
+    field_values[FIELD_IDS[active_field_index]] = common_input.text
+
     var ok := bool(ble.databaseUpdateRecord(
         editing_record_id,
-        edit_id_input.text.strip_edges(),
-        edit_device_input.text.strip_edges(),
-        edit_manufacturer_input.text.strip_edges(),
-        edit_room_input.text.strip_edges()
+        str(field_values["id"]).strip_edges(),
+        str(field_values["geraeteart"]).strip_edges(),
+        str(field_values["hersteller"]).strip_edges(),
+        current_room.strip_edges()
     ))
 
     if not ok:
         _set_workflow("Datensatz konnte nicht geändert werden.", NOK_COLOR)
         return
 
+    _finish_capture_edit(true)
+
+
+func _finish_capture_edit(saved: bool) -> void:
+    common_input.release_focus()
+    DisplayServer.virtual_keyboard_hide()
+
+    current_room = edit_previous_room
+    _refresh_room_label()
     editing_record_id = -1
+    editing_record_snapshot = {}
+    edit_previous_room = ""
+    current_measurement = {}
+    _clear_capture_values()
+    _set_capture_locked(true)
+    _show_waiting_state()
+
     _refresh_data_view()
+    if data_overlay != null:
+        data_overlay.visible = true
+        data_overlay.modulate.a = 0.0
+        var tween := create_tween()
+        tween.tween_property(data_overlay, "modulate:a", 1.0, 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+
+    if saved:
+        _set_workflow("Datensatz geändert.", OK_COLOR)
 
 
 func _build_data_overlay() -> void:
@@ -507,15 +582,26 @@ func _build_data_overlay() -> void:
 func _open_data_view() -> void:
     if data_overlay == null:
         return
+    if not current_measurement.is_empty() and editing_record_id < 0:
+        _set_workflow("Aktuelle Messung zuerst speichern oder verwerfen.", Color("f0b84b"))
+        return
+
     common_input.release_focus()
     DisplayServer.virtual_keyboard_hide()
+    if core != null:
+        core.reset_measurement_flow()
     _refresh_data_view()
     data_overlay.visible = true
+    data_overlay.modulate.a = 1.0
 
 
 func _close_data_view() -> void:
     if data_overlay != null:
         data_overlay.visible = false
+    if core != null and ble != null and str(ble.getConnectionState()) == "READY":
+        core.arm_measurement_monitor()
+        _show_waiting_state()
+        _set_workflow("Verbunden · wartet auf PRX", OK_COLOR)
 
 
 func _refresh_data_view() -> void:
@@ -1250,16 +1336,21 @@ func _refresh_gesture_visual(direction: int = 0, progress: float = 0.0) -> void:
         gesture_button.add_theme_stylebox_override("normal", _box(Color("0d1925"), Color("2a3c50"), 1, 16))
         return
 
+    var editing := editing_record_id >= 0
+
     if direction < 0:
-        gesture_button.text = "↑\nVERWERFEN\n" + str(int(progress * 100.0)) + "%"
-        gesture_button.add_theme_color_override("font_color", Color("ff7885"))
-        gesture_button.add_theme_stylebox_override("normal", _box(Color("27151c"), Color("ff7885"), 3, 16))
+        gesture_button.text = "↑\n" + ("ABBRECHEN" if editing else "VERWERFEN") + "\n" + str(int(progress * 100.0)) + "%"
+        gesture_button.add_theme_color_override("font_color", NOK_COLOR)
+        gesture_button.add_theme_stylebox_override("normal", _box(Color("27151c"), NOK_COLOR, 3, 16))
     elif direction > 0:
-        gesture_button.text = "↓\nSPEICHERN\n" + str(int(progress * 100.0)) + "%"
+        gesture_button.text = "↓\n" + ("ÜBERNEHMEN" if editing else "SPEICHERN") + "\n" + str(int(progress * 100.0)) + "%"
         gesture_button.add_theme_color_override("font_color", OK_COLOR)
         gesture_button.add_theme_stylebox_override("normal", _box(Color("10231f"), OK_COLOR, 3, 16))
     else:
-        gesture_button.text = "→\nWEITER\n\n↑ Verwerfen\n↓ Speichern"
+        if editing:
+            gesture_button.text = "→\nWEITER\n\n↑ Abbrechen\n↓ Übernehmen"
+        else:
+            gesture_button.text = "→\nWEITER\n\n↑ Verwerfen\n↓ Speichern"
         gesture_button.add_theme_color_override("font_color", Color("dce6ef"))
         gesture_button.add_theme_stylebox_override("normal", _box(Color("101d2b"), Color("31475e"), 1, 16))
 
@@ -1338,6 +1429,10 @@ func _save_current_measurement() -> void:
     if current_measurement.is_empty():
         return
 
+    if editing_record_id >= 0:
+        _save_edited_capture_record()
+        return
+
     if not _persist_measurement(current_measurement):
         var message := last_database_error if not last_database_error.is_empty() else "Speichern fehlgeschlagen."
         _set_workflow(message, Color("ff7885"))
@@ -1349,6 +1444,9 @@ func _save_current_measurement() -> void:
 
 func _discard_current_measurement() -> void:
     if current_measurement.is_empty():
+        return
+    if editing_record_id >= 0:
+        _finish_capture_edit(false)
         return
     _begin_post_measurement_action("VERWORFEN")
 
