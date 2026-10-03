@@ -29,6 +29,7 @@ var field_values := {
 }
 var active_field_index := 0
 var capture_locked := true
+var syncing_common_input := false
 
 var gesture_pressed := false
 var gesture_start_position := Vector2.ZERO
@@ -42,6 +43,8 @@ var current_room := ""
 var database_ready := false
 var last_database_error := ""
 
+var main_root: VBoxContainer
+var capture_row: HBoxContainer
 var connection_button: Button
 var room_label: Button
 var today_label: Button
@@ -70,6 +73,8 @@ var edit_device_input: LineEdit
 var edit_manufacturer_input: LineEdit
 var edit_room_input: LineEdit
 var editing_record_id := -1
+var editing_record_snapshot: Dictionary = {}
+var edit_previous_room := ""
 
 
 func _ready() -> void:
@@ -122,15 +127,15 @@ func _build_ui() -> void:
     margin.add_theme_constant_override("margin_bottom", 14)
     add_child(margin)
 
-    var root := VBoxContainer.new()
-    root.add_theme_constant_override("separation", 10)
-    margin.add_child(root)
+    main_root = VBoxContainer.new()
+    main_root.add_theme_constant_override("separation", 10)
+    margin.add_child(main_root)
 
     # --- Compact status bar -------------------------------------------------
     var topbar := HBoxContainer.new()
     topbar.custom_minimum_size.y = 58
     topbar.add_theme_constant_override("separation", 10)
-    root.add_child(topbar)
+    main_root.add_child(topbar)
 
     var brand := Label.new()
     brand.text = "SECU-DAT"
@@ -175,7 +180,7 @@ func _build_ui() -> void:
     # Neutral body; only the result topbar carries the OK/NOK accent.
     measurement_card = PanelContainer.new()
     measurement_card.add_theme_stylebox_override("panel", _box(Color("0b1724"), NEUTRAL_BORDER, 1, 16))
-    root.add_child(measurement_card)
+    main_root.add_child(measurement_card)
 
     var measurement_shell := VBoxContainer.new()
     measurement_shell.add_theme_constant_override("separation", 0)
@@ -224,10 +229,10 @@ func _build_ui() -> void:
     measurement_box.add_child(workflow_label)
 
     # --- Fixed thumb-capture geometry: 2/3 fields + 1/3 gesture pad --------
-    var capture_row := HBoxContainer.new()
+    capture_row = HBoxContainer.new()
     capture_row.custom_minimum_size.y = 240
     capture_row.add_theme_constant_override("separation", 9)
-    root.add_child(capture_row)
+    main_root.add_child(capture_row)
 
     var field_stack := VBoxContainer.new()
     field_stack.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -268,14 +273,14 @@ func _build_ui() -> void:
     common_input.clear_button_enabled = true
     common_input.text_changed.connect(_on_common_input_changed)
     common_input.text_submitted.connect(_on_common_input_submitted)
-    root.add_child(common_input)
+    main_root.add_child(common_input)
 
     # --- Reserved future suggestion space: always between input and keyboard -
     suggestion_panel = PanelContainer.new()
     suggestion_panel.custom_minimum_size.y = 124
     suggestion_panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
     suggestion_panel.add_theme_stylebox_override("panel", _box(Color("09131e"), Color("18283a"), 1, 14))
-    root.add_child(suggestion_panel)
+    main_root.add_child(suggestion_panel)
 
     var suggestion_margin := MarginContainer.new()
     suggestion_margin.add_theme_constant_override("margin_left", 12)
