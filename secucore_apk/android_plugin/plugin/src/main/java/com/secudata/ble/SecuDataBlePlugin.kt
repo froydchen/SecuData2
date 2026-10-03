@@ -470,6 +470,19 @@ class SecuDataBlePlugin(godot: Godot) : GodotPlugin(godot) {
 
 
     @UsedByGodot
+    fun expandDeviceAbbreviations(input: String): String {
+        if (input.isEmpty()) return input
+        val trailingSpace = input.lastOrNull()?.isWhitespace() == true
+        val tokens = input.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
+        if (tokens.isEmpty()) return if (trailingSpace) " " else ""
+
+        val expanded = tokens.joinToString(" ") { token ->
+            DEVICE_ABBREVIATIONS[token.uppercase(Locale.ROOT)] ?: token
+        }
+        return expanded + if (trailingSpace) " " else ""
+    }
+
+    @UsedByGodot
     fun databaseSuggestions(
         field: String,
         deviceType: String,
@@ -485,10 +498,41 @@ class SecuDataBlePlugin(godot: Godot) : GodotPlugin(godot) {
             "hersteller", "manufacturer" -> "MANUFACTURER"
             else -> return "[]"
         }
-        val query = input.trim()
+
+        // Expand abbreviations for matching as well, even before the UI commits
+        // the expanded form. "NT" therefore already matches "Netzteil".
+        val expandedInput = if (fieldKey == "DEVICE") expandDeviceAbbreviations(input) else input
+        val query = expandedInput.trim()
         val queryNorm = normalizeVocabulary(query)
         val result = JSONArray()
         val seen = LinkedHashSet<String>()
+
+        // Load dismissed entries ONCE. v0.13 queried SQLite for every candidate,
+        // which made the device field block the Godot main thread for seconds.
+        val dismissKey = if (fieldKey == "MANUFACTURER") resolveDeviceKey(deviceType) else ""
+        val dismissed = LinkedHashSet<String>()
+        if (fieldKey != "ID") {
+            val selection: String
+            val args: Array<String>
+            if (fieldKey == "MANUFACTURER") {
+                selection = "kind = ? AND status = 'dismissed' AND (device_key = ? OR device_key = '')"
+                args = arrayOf(fieldKey, dismissKey)
+            } else {
+                selection = "kind = ? AND status = 'dismissed'"
+                args = arrayOf(fieldKey)
+            }
+            db.query(
+                "dictionary_entries",
+                arrayOf("normalized"),
+                selection,
+                args,
+                null,
+                null,
+                null,
+            ).use { cursor ->
+                while (cursor.moveToNext()) dismissed += cursor.getString(0).orEmpty()
+            }
+        }
 
         fun add(
             value: String,
@@ -496,13 +540,19 @@ class SecuDataBlePlugin(godot: Godot) : GodotPlugin(godot) {
             source: String = "dictionary",
             label: String = value,
             respectQuery: Boolean = true,
+            dictionaryValue: String = "",
         ) {
             val clean = value.trim()
             if (clean.isBlank()) return
             val normalized = normalizeVocabulary(clean)
             if (normalized.isBlank() || normalized in seen) return
-            if (fieldKey != "ID" && isVocabularyDismissed(db, fieldKey, normalized, deviceType)) return
+
+            // Cheap text filter FIRST; no database work per candidate.
             if (respectQuery && queryNorm.isNotBlank() && !matchesVocabulary(clean, queryNorm)) return
+
+            val dismissNorm = normalizeVocabulary(if (dictionaryValue.isNotBlank()) dictionaryValue else clean)
+            if (fieldKey != "ID" && dismissNorm in dismissed) return
+
             seen += normalized
             result.put(
                 JSONObject()
@@ -510,6 +560,7 @@ class SecuDataBlePlugin(godot: Godot) : GodotPlugin(godot) {
                     .put("label", label)
                     .put("action", action)
                     .put("source", source)
+                    .put("dictionary_value", if (dictionaryValue.isNotBlank()) dictionaryValue else clean)
             )
         }
 
@@ -534,41 +585,131 @@ class SecuDataBlePlugin(godot: Godot) : GodotPlugin(godot) {
                 }
 
                 "DEVICE" -> {
-                    val base = baseDeviceSuggestionsForSwitch(switchPosition)
-                    for (value in base) {
-                        if (result.length() >= safeLimit) break
-                        add(value, source = "base")
-                    }
+                    val compound = splitNetzteilCompound(expandedInput)
 
-                    db.rawQuery(
-                        """
-                        SELECT geraeteart, COUNT(*) AS n, MAX(id) AS last_id
-                        FROM records
-                        WHERE TRIM(geraeteart) <> ''
-                        GROUP BY LOWER(TRIM(geraeteart))
-                        ORDER BY n DESC, last_id DESC
-                        LIMIT 120
-                        """.trimIndent(),
-                        null,
-                    ).use { cursor ->
-                        while (cursor.moveToNext() && result.length() < safeLimit) {
-                            val value = cursor.getString(0).orEmpty()
-                            if (deviceAllowedForSwitch(value, switchPosition)) {
-                                add(value, source = "history")
+                    if (compound != null) {
+                        val prefix = compound.first
+                        val remainder = compound.second
+                        val remainderNorm = normalizeVocabulary(remainder)
+
+                        // Past combinations first: "Netzteil TFT", "Netzteil Monitor", …
+                        db.rawQuery(
+                            """
+                            SELECT geraeteart, COUNT(*) AS n, MAX(id) AS last_id
+                            FROM records
+                            WHERE LOWER(TRIM(geraeteart)) LIKE LOWER(?)
+                            GROUP BY LOWER(TRIM(geraeteart))
+                            ORDER BY n DESC, last_id DESC
+                            LIMIT 80
+                            """.trimIndent(),
+                            arrayOf("$prefix %"),
+                        ).use { cursor ->
+                            while (cursor.moveToNext() && result.length() < safeLimit) {
+                                val value = cursor.getString(0).orEmpty()
+                                val suffix = value.substringAfter(" ", "")
+                                if (remainderNorm.isBlank() || matchesVocabulary(suffix, remainderNorm)) {
+                                    add(value, source = "history-compound", respectQuery = false)
+                                }
                             }
                         }
-                    }
 
-                    addStoredVocabulary(db, "DEVICE", "", queryNorm, safeLimit, result, seen, deviceType)
+                        // Known device types can be appended without losing the prefix.
+                        if (result.length() < safeLimit) {
+                            for (candidate in baseDeviceSuggestionsForSwitch(3)) {
+                                if (result.length() >= safeLimit) break
+                                if (normalizeVocabulary(candidate) == normalizeVocabulary(prefix)) continue
+                                if (remainderNorm.isNotBlank() && !matchesVocabulary(candidate, remainderNorm)) continue
+                                add("$prefix $candidate", source = "compound-base", respectQuery = false)
+                            }
+                        }
 
-                    if (query.isNotBlank() && result.length() < safeLimit) {
-                        val candidate = extractUnknownDeviceCandidate(query)
-                        if (candidate.isNotBlank() && !isKnownDevice(candidate, db)) {
-                            val similar = findSimilarDevice(candidate, db)
-                            if (similar.isNotBlank()) {
-                                add(similar, action = "fill", source = "similar", label = "≈ $similar", respectQuery = false)
-                            } else if (!isVocabularyDismissed(db, "DEVICE", normalizeVocabulary(candidate), "")) {
-                                add(candidate, action = "add", source = "unknown", label = "＋ $candidate", respectQuery = false)
+                        // User-accepted device vocabulary is also valid as a suffix.
+                        if (result.length() < safeLimit) {
+                            db.query(
+                                "dictionary_entries",
+                                arrayOf("value"),
+                                "kind = 'DEVICE' AND status = 'active'",
+                                null,
+                                null,
+                                null,
+                                "use_count DESC, updated_at DESC",
+                                "100",
+                            ).use { cursor ->
+                                while (cursor.moveToNext() && result.length() < safeLimit) {
+                                    val candidate = cursor.getString(0).orEmpty()
+                                    if (remainderNorm.isNotBlank() && !matchesVocabulary(candidate, remainderNorm)) continue
+                                    add("$prefix $candidate", source = "compound-dictionary", respectQuery = false)
+                                }
+                            }
+                        }
+
+                        if (remainder.isNotBlank() && result.length() < safeLimit) {
+                            if (!isKnownDevice(remainder, db)) {
+                                val similar = findSimilarDevice(remainder, db)
+                                if (similar.isNotBlank()) {
+                                    add(
+                                        "$prefix $similar",
+                                        action = "fill",
+                                        source = "similar",
+                                        label = "≈ $similar",
+                                        respectQuery = false,
+                                    )
+                                } else if (normalizeVocabulary(remainder) !in dismissed) {
+                                    add(
+                                        "$prefix $remainder",
+                                        action = "add",
+                                        source = "unknown",
+                                        label = "＋ $remainder",
+                                        respectQuery = false,
+                                        dictionaryValue = remainder,
+                                    )
+                                }
+                            }
+                        }
+                    } else {
+                        val base = baseDeviceSuggestionsForSwitch(switchPosition)
+                        for (value in base) {
+                            if (result.length() >= safeLimit) break
+                            add(value, source = "base")
+                        }
+
+                        db.rawQuery(
+                            """
+                            SELECT geraeteart, COUNT(*) AS n, MAX(id) AS last_id
+                            FROM records
+                            WHERE TRIM(geraeteart) <> ''
+                            GROUP BY LOWER(TRIM(geraeteart))
+                            ORDER BY n DESC, last_id DESC
+                            LIMIT 120
+                            """.trimIndent(),
+                            null,
+                        ).use { cursor ->
+                            while (cursor.moveToNext() && result.length() < safeLimit) {
+                                val value = cursor.getString(0).orEmpty()
+                                if (deviceAllowedForSwitch(value, switchPosition)) {
+                                    add(value, source = "history")
+                                }
+                            }
+                        }
+
+                        addStoredVocabulary(db, "DEVICE", "", queryNorm, safeLimit, result, seen, deviceType)
+
+                        if (query.isNotBlank() && result.length() < safeLimit) {
+                            val candidate = extractUnknownDeviceCandidate(query)
+                            if (candidate.isNotBlank() && !isKnownDevice(candidate, db)) {
+                                val similar = findSimilarDevice(candidate, db)
+                                if (similar.isNotBlank()) {
+                                    add(similar, action = "fill", source = "similar", label = "≈ $similar", respectQuery = false)
+                                } else if (normalizeVocabulary(candidate) !in dismissed) {
+                                    add(
+                                        candidate,
+                                        action = "add",
+                                        source = "unknown",
+                                        label = "＋ $candidate",
+                                        respectQuery = false,
+                                        dictionaryValue = candidate,
+                                    )
+                                }
                             }
                         }
                     }
@@ -624,9 +765,16 @@ class SecuDataBlePlugin(godot: Godot) : GodotPlugin(godot) {
                         if (!exact) {
                             val similar = findSimilarValue(query, known)
                             if (similar.isNotBlank()) {
-                                add(similar, action = "fill", source = "similar", label = "≈ $similar")
-                            } else if (!isVocabularyDismissed(db, "MANUFACTURER", queryNorm, deviceKey)) {
-                                add(query, action = "add", source = "unknown", label = "＋ $query", respectQuery = false)
+                                add(similar, action = "fill", source = "similar", label = "≈ $similar", respectQuery = false)
+                            } else if (queryNorm !in dismissed) {
+                                add(
+                                    query,
+                                    action = "add",
+                                    source = "unknown",
+                                    label = "＋ $query",
+                                    respectQuery = false,
+                                    dictionaryValue = query,
+                                )
                             }
                         }
                     }
@@ -922,6 +1070,13 @@ class SecuDataBlePlugin(godot: Godot) : GodotPlugin(godot) {
             if (hit != null) return hit.value
         }
         return normalized
+    }
+
+    private fun splitNetzteilCompound(input: String): Pair<String, String>? {
+        val expanded = expandDeviceAbbreviations(input)
+        val match = Regex("^\\s*(Netzteil)\\s+(.*)$", RegexOption.IGNORE_CASE).find(expanded)
+            ?: return null
+        return Pair("Netzteil", match.groupValues[2].trim())
     }
 
     private fun extractUnknownDeviceCandidate(input: String): String {
