@@ -893,8 +893,22 @@ class SecuDataBlePlugin(godot: Godot) : GodotPlugin(godot) {
         val normalized = normalizeVocabulary(deviceType)
         if (normalized.isBlank()) return ""
 
-        // Deliberately use the FIRST recognised device token/prefix. Thus
-        // "Netzteil TFT" remains a Netzteil for manufacturer suggestions.
+        // Special SecuData rule:
+        // "Netzteil" on its own uses the Netzteil/Ladegerät manufacturer group.
+        // If something follows it, the manufacturer belongs to the appended
+        // device instead: "Netzteil TFT" -> TFT, "Netzteil Abheftgerät" ->
+        // Abheftgerät. This also works before the appended device is formally
+        // accepted into the dictionary.
+        val netzteilPrefixes = listOf("netzteil", "nt")
+        for (prefix in netzteilPrefixes) {
+            if (normalized.startsWith("$prefix ")) {
+                val remainder = normalized.removePrefix("$prefix ").trim()
+                if (remainder.isNotBlank()) {
+                    return resolveDeviceKey(remainder)
+                }
+            }
+        }
+
         val orderedAliases = DEVICE_ALIAS_TO_KEY.keys.sortedByDescending { it.length }
         for (alias in orderedAliases) {
             val aliasNorm = normalizeVocabulary(alias)
