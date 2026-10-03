@@ -1332,7 +1332,11 @@ func _set_active_field(index: int, focus_input: bool = false) -> void:
         field_values[FIELD_IDS[active_field_index]] = common_input.text
 
     active_field_index = clampi(index, 0, FIELD_IDS.size() - 1)
-    _sync_common_input_from_active()
+
+    # Refresh the complete capture block after switching. The IME carry-over
+    # fix in v0.12 only refreshed the shared LineEdit and accidentally left
+    # the three coloured field cards on their old active visual state.
+    _refresh_capture_ui()
     _refresh_suggestions()
 
     if focus_input and not capture_locked:
