@@ -1431,6 +1431,159 @@ func _clear_capture_values() -> void:
     _refresh_capture_ui()
 
 
+func _refresh_suggestions() -> void:
+    if suggestion_grid == null:
+        return
+
+    for child in suggestion_grid.get_children():
+        suggestion_grid.remove_child(child)
+        child.queue_free()
+
+    if capture_locked:
+        suggestion_hint.text = "Wortvorschläge erscheinen nach einer Messung."
+        return
+
+    if ble == null or not database_ready:
+        suggestion_hint.text = "Wörterbuch nicht verfügbar."
+        return
+
+    var field := FIELD_IDS[active_field_index]
+    var device_type := str(field_values.get("geraeteart", ""))
+    var input_value := str(field_values.get(field, ""))
+    var switch_position := int(current_measurement.get("switch_position", -1))
+
+    var response = JSON.parse_string(str(ble.databaseSuggestions(
+        field,
+        device_type,
+        input_value,
+        switch_position,
+        6
+    )))
+
+    if not (response is Array):
+        suggestion_hint.text = "Keine Vorschläge."
+        return
+
+    var suggestions: Array = response
+    if suggestions.is_empty():
+        suggestion_hint.text = "Keine Treffer · weiter tippen oder eigenen Wert verwenden."
+        return
+
+    suggestion_hint.text = (
+        "Tippen: übernehmen"
+        if field == "id"
+        else "Tippen: übernehmen  ·  halten: ausblenden"
+    )
+
+    var accent: Color = FIELD_COLORS[active_field_index]
+    for raw_item in suggestions:
+        if not (raw_item is Dictionary):
+            continue
+
+        var item: Dictionary = raw_item
+        var value := str(item.get("value", "")).strip_edges()
+        var label_text := str(item.get("label", value)).strip_edges()
+        var action := str(item.get("action", "fill"))
+        var source := str(item.get("source", "dictionary"))
+        if value.is_empty():
+            continue
+
+        var button := Button.new()
+        button.text = label_text
+        button.custom_minimum_size.y = 43
+        button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+        button.add_theme_font_size_override("font_size", 15)
+        button.add_theme_color_override(
+            "font_color",
+            OK_COLOR if action == "add" else Color("dbe5ee")
+        )
+        button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+        button.add_theme_stylebox_override(
+            "normal",
+            _box(
+                Color("10202d") if action == "add" else Color("0d1925"),
+                OK_COLOR if action == "add" else accent.darkened(0.25),
+                1,
+                10
+            )
+        )
+        button.add_theme_stylebox_override(
+            "pressed",
+            _box(
+                accent.darkened(0.72),
+                accent,
+                2,
+                10
+            )
+        )
+        if source == "similar":
+            button.add_theme_color_override("font_color", Color("f0b84b"))
+
+        var key := button.get_instance_id()
+        button.button_down.connect(_on_suggestion_button_down.bind(key))
+        button.button_up.connect(_on_suggestion_button_up.bind(key, field, value))
+        button.pressed.connect(_on_suggestion_pressed.bind(key, field, value, action))
+        suggestion_grid.add_child(button)
+
+
+func _on_suggestion_button_down(key: int) -> void:
+    suggestion_press_ms[key] = Time.get_ticks_msec()
+    suggestion_long_press_handled[key] = false
+
+
+func _on_suggestion_button_up(key: int, field: String, value: String) -> void:
+    var started := int(suggestion_press_ms.get(key, Time.get_ticks_msec()))
+    var elapsed := Time.get_ticks_msec() - started
+
+    if elapsed < 520:
+        return
+    if field == "id" or value == "-":
+        return
+    if ble == null or not database_ready:
+        return
+
+    if bool(ble.databaseDismissSuggestion(
+        field,
+        value,
+        str(field_values.get("geraeteart", ""))
+    )):
+        suggestion_long_press_handled[key] = true
+        _set_workflow("Vorschlag ausgeblendet: " + value, Color("8fa0b4"))
+        _refresh_suggestions()
+
+
+func _on_suggestion_pressed(key: int, field: String, value: String, action: String) -> void:
+    if bool(suggestion_long_press_handled.get(key, false)):
+        suggestion_press_ms.erase(key)
+        suggestion_long_press_handled.erase(key)
+        return
+
+    suggestion_press_ms.erase(key)
+    suggestion_long_press_handled.erase(key)
+
+    if action == "add" and field != "id":
+        if ble == null or not database_ready:
+            return
+        if not bool(ble.databaseAcceptVocabulary(
+            field,
+            value,
+            str(field_values.get("geraeteart", ""))
+        )):
+            _set_workflow("Wörterbuch-Eintrag konnte nicht übernommen werden.", NOK_COLOR)
+            return
+        _set_workflow("Zum Wörterbuch hinzugefügt: " + value, OK_COLOR)
+
+    field_values[field] = value
+    if FIELD_IDS[active_field_index] == field:
+        _sync_common_input_from_active()
+        common_input.grab_focus()
+        common_input.edit()
+        common_input.caret_column = common_input.text.length()
+
+    _refresh_capture_rows_only()
+    _refresh_suggestions()
+
+
 func _refresh_gesture_visual(direction: int = 0, progress: float = 0.0) -> void:
     if gesture_button == null:
         return
